@@ -235,6 +235,17 @@ export function generateLocalNarrative({ systemLabel, jenisAir, monthLabel, entr
       return `Pada parameter ${meta.short}, jumlah titik yang mencapai Alert/Action Limit pada periode ini (${curNoted} titik) meningkat dibanding periode sebelumnya (${prevNoted} titik), sehingga perlu dicermati lebih lanjut pada periode berikutnya.`;
     });
     reviewTren = `Berdasarkan hasil evaluasi tren ${jenisAir} ${systemLabel} periode ${monthLabel} dibandingkan dengan periode sebelumnya:\n\n${lines.join("\n\n")}\n\nSecara keseluruhan, hasil review tren menunjukkan bahwa sistem ${systemLabel} masih berada dalam kondisi terkendali dibandingkan periode sebelumnya.`;
+  } else {
+    // Belum ada data periode sebelumnya — tetap rangkum hasil periode ini
+    // sendiri, dan jelaskan kenapa perbandingan tren belum bisa dilakukan,
+    // alih-alih membiarkan bagian ini kosong.
+    const noted = params.flatMap((paramKey) =>
+      collectPoints(entries, paramKey).filter((p) => statusFor(p.raw, paramKey).level >= 2).map(() => paramKey)
+    );
+    const ringkasan = noted.length === 0
+      ? `seluruh parameter (${params.map((p) => PARAM_META[p].label).join(", ")}) berada dalam kondisi terkendali tanpa hasil yang mencapai Alert maupun Action Limit`
+      : `terdapat beberapa hasil yang mencapai Alert/Action Limit pada parameter ${Array.from(new Set(noted)).map((p) => PARAM_META[p].short).join(", ")}, namun secara umum sistem masih berada dalam kondisi terkendali`;
+    reviewTren = `Untuk periode ${monthLabel}, hasil pengujian ${jenisAir} ${systemLabel} menunjukkan bahwa ${ringkasan}.\n\nPerbandingan tren dengan periode sebelumnya belum dapat dijelaskan lebih detail karena data periode sebelumnya belum tersedia di sistem. Review tren dibanding periode sebelumnya akan dapat disusun mulai periode berikutnya, setelah data bulan ini tersimpan sebagai pembanding.`;
   }
 
   const kesimpulan = kesimpulanText(systemLabel, jenisAir, monthLabel, entries, params);

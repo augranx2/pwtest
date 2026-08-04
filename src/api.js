@@ -101,11 +101,11 @@ export function approveReportHasil(system, tanggal, token) {
 
 // Vercel Serverless Function (bukan Apps Script) — jalan di domain website sendiri,
 // jadi tidak perlu urusan CORS seperti panggilan ke Apps Script di atas.
-export async function generateNarrative({ systemLabel, jenisAir, monthLabel, stats, prevSummary }) {
+export async function generateNarrative({ systemLabel, jenisAir, monthLabel, stats, prevStats, prevSummary }) {
   const res = await fetch("/api/generate-narrative", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ systemLabel, jenisAir, monthLabel, stats, prevSummary }),
+    body: JSON.stringify({ systemLabel, jenisAir, monthLabel, stats, prevStats, prevSummary }),
   });
   const data = await res.json();
   if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);

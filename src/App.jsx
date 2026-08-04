@@ -9,7 +9,7 @@ import {
   AlertTriangle, CheckCircle2, Droplet, LogIn, LogOut, User, History, Lock,
 } from "lucide-react";
 import {
-  fetchEntries, saveEntries as apiSaveEntries,
+  fetchMaster, fetchEntries, saveEntries as apiSaveEntries,
   fetchReport, saveReport as apiSaveReport, fetchStatusIndex,
   generateNarrative, approveDikaji as apiApproveDikaji,
   approveMengetahui as apiApproveMengetahui, fetchActivityLog,
@@ -21,30 +21,11 @@ import { useAuth, hasAccess } from "./auth.js";
 
 // Sistem air TETAP (harus persis sinkron dengan SYSTEMS di Code.gs)
 const SYSTEMS = [
-  {
-    key: "pw_nbl", jenis: "PW", label: "Purified Water — NBL", fasilitas: "Looping Non Betalaktam (NBL)",
-    points: ["SV 49-03C", "SV 60-03C",
-      "POU-1", "POU-2", "POU-3", "POU-4", "POU-5", "POU-6", "POU-7", "POU-8", "POU-9", "POU-10",
-      "POU-11", "POU-12", "POU-13", "POU-14", "POU-15", "POU-16", "POU-17", "POU-18", "POU-19", "POU-20"],
-  },
-  {
-    key: "pw_sefalosporin", jenis: "PW", label: "Purified Water — Sefalosporin", fasilitas: "Looping Sefalosporin",
-    points: ["SV 60-02C", "SP-23", "SP-24",
-      "POU-01", "POU-02", "POU-03", "POU-04", "POU-05", "POU-06", "POU-07", "POU-08", "POU-09", "POU-10",
-      "POU-11", "POU-12", "POU-13", "POU-14", "POU-15", "POU-16", "POU-17", "POU-18", "POU-19", "POU-20"],
-  },
-  {
-    key: "pw_betalaktam", jenis: "PW", label: "Purified Water — Betalaktam", fasilitas: "Looping Betalaktam (BL)",
-    points: ["POU-1", "POU-2"],
-  },
-  {
-    key: "wfi_sefalosporin", jenis: "WFI", label: "Water For Injection — Sefalosporin", fasilitas: "Looping Sefalosporin",
-    points: ["Tank WFI", "POU-1", "POU-2", "POU-3", "Return WFI"],
-  },
-  {
-    key: "ps_sefalosporin_steril", jenis: "Pure Steam", label: "Pure Steam — Sefalosporin Steril", fasilitas: "Sefalosporin Steril",
-    points: ["PS-1"],
-  },
+  { key: "pw_nbl", jenis: "PW", label: "Purified Water — NBL" },
+  { key: "pw_sefalosporin", jenis: "PW", label: "Purified Water — Sefalosporin" },
+  { key: "pw_betalaktam", jenis: "PW", label: "Purified Water — Betalaktam" },
+  { key: "wfi_sefalosporin", jenis: "WFI", label: "Water For Injection — Sefalosporin" },
+  { key: "ps_sefalosporin_steril", jenis: "Pure Steam", label: "Pure Steam — Sefalosporin Steril" },
 ];
 
 function uid() {
@@ -96,6 +77,47 @@ function VerifyQR({ type, system, period, slot, size = 64 }) {
       <QRCodeSVG value={url} size={size} level="M" bgColor="#ffffff" fgColor="#0f172a" />
       <span className="text-center text-[9px] leading-tight text-slate-400">Scan untuk verifikasi</span>
     </div>
+  );
+}
+
+/* ========================================================================= INPUT TANGGAL FORMAT INDONESIA (dd/mm/yyyy)
+   <input type="date"> menampilkan format sesuai locale OS/browser (kadang
+   mm/dd/yyyy), tidak bisa dipaksa dd/mm/yyyy lewat HTML/CSS saja — jadi kita
+   pakai text input dengan pola dd/mm/yyyy, disimpan sebagai ISO (yyyy-mm-dd)
+   di data seperti biasa. */
+function isoToID(iso) {
+  if (!iso) return "";
+  const [y, m, d] = String(iso).split("-");
+  if (!y || !m || !d) return "";
+  return `${d}/${m}/${y}`;
+}
+function idToISO(text) {
+  const m = String(text || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const [, d, mo, y] = m;
+  const dd = d.padStart(2, "0");
+  const mm = mo.padStart(2, "0");
+  if (Number(dd) < 1 || Number(dd) > 31 || Number(mm) < 1 || Number(mm) > 12) return null;
+  return `${y}-${mm}-${dd}`;
+}
+function DateInputID({ value, onChange, disabled, className }) {
+  const [text, setText] = useState(isoToID(value));
+  useEffect(() => { setText(isoToID(value)); }, [value]);
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      placeholder="dd/mm/yyyy"
+      disabled={disabled}
+      value={text}
+      onChange={(ev) => {
+        const t = ev.target.value;
+        setText(t);
+        const iso = idToISO(t);
+        if (iso) onChange(iso);
+      }}
+      className={className}
+    />
   );
 }
 
@@ -234,19 +256,38 @@ function ParamChart({ entries, paramKey, systemLabel }) {
 }
 
 /* ========================================================================= INPUT DATA (EntryEditor) */
-function EntryRow({ entry, points, params, readOnly, canDelete, onChange, onDelete }) {
+function EntryRow({ entry, masterPoints, params, readOnly, canDelete, onChange, onDelete }) {
+  const isCustom = entry._custom || !masterPoints.some((p) => p.code === entry.titikSampling);
+  const handlePick = (val) => {
+    if (val === "__custom__") {
+      onChange({ ...entry, _custom: true });
+      return;
+    }
+    const pt = masterPoints.find((p) => p.code === val);
+    if (pt) onChange({ ...entry, _custom: false, titikSampling: pt.code, namaRuangan: pt.name });
+  };
   return (
     <tr className="border-b border-slate-100 align-top">
       <td className="px-2 py-1.5">
-        <input type="date" disabled={readOnly} className="w-36 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50"
-          value={entry.tanggal || ""} onChange={(ev) => onChange({ ...entry, tanggal: ev.target.value })} />
+        <DateInputID disabled={readOnly} className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50"
+          value={entry.tanggal || ""} onChange={(iso) => onChange({ ...entry, tanggal: iso })} />
       </td>
       <td className="px-2 py-1.5">
         <select disabled={readOnly} className="w-40 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50"
-          value={entry.titikSampling || ""} onChange={(ev) => onChange({ ...entry, titikSampling: ev.target.value })}>
-          <option value="">-- pilih titik --</option>
-          {points.map((p) => <option key={p} value={p}>{p}</option>)}
+          value={isCustom ? "__custom__" : entry.titikSampling || "__custom__"} onChange={(ev) => handlePick(ev.target.value)}>
+          <option value="__custom__">-- Input manual --</option>
+          {masterPoints.map((p) => <option key={p.code} value={p.code}>{p.code}{p.name ? ` — ${p.name}` : ""}</option>)}
         </select>
+        {isCustom && (
+          <input type="text" disabled={readOnly} className="mt-1 w-40 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50"
+            placeholder="Kode titik sampling" value={entry.titikSampling || ""}
+            onChange={(ev) => onChange({ ...entry, titikSampling: ev.target.value })} />
+        )}
+      </td>
+      <td className="px-2 py-1.5">
+        <input type="text" disabled={readOnly || !isCustom} className="w-36 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50"
+          placeholder="Nama ruangan/area" value={entry.namaRuangan || ""}
+          onChange={(ev) => onChange({ ...entry, namaRuangan: ev.target.value })} />
       </td>
       {params.map((p) => (
         <td key={p} className="px-2 py-1.5">
@@ -278,14 +319,14 @@ function EntryRow({ entry, points, params, readOnly, canDelete, onChange, onDele
   );
 }
 
-function EntryEditor({ system, entries, setEntries, onSave, saving, canInput = false, canDeleteExisting = false, accessNote }) {
+function EntryEditor({ system, masterPoints, entries, setEntries, onSave, saving, canInput = false, canDeleteExisting = false, accessNote }) {
   const params = PARAMS_BY_JENIS[system.jenis] || [];
   const addRow = () => {
     // Tanggal baris baru ikut tanggal baris paling atas (data terakhir yang
     // barusan diinput), bukan selalu tanggal hari ini — menghemat waktu saat
     // input data historis/bulanan dalam jumlah banyak.
     const defaultTanggal = entries[0]?.tanggal || todayISO();
-    const blank = { id: uid(), tanggal: defaultTanggal, titikSampling: "" };
+    const blank = { id: uid(), tanggal: defaultTanggal, titikSampling: "", namaRuangan: "" };
     params.forEach((p) => { blank[p] = ""; });
     setEntries([blank, ...entries]);
   };
@@ -318,14 +359,14 @@ function EntryEditor({ system, entries, setEntries, onSave, saving, canInput = f
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-400">
-                <th className="px-2 py-1.5">Tanggal</th><th className="px-2 py-1.5">Titik Sampling</th>
+                <th className="px-2 py-1.5">Tanggal</th><th className="px-2 py-1.5">Titik Sampling</th><th className="px-2 py-1.5">Nama Ruangan</th>
                 {params.map((p) => <th key={p} className="px-2 py-1.5">{PARAM_META[p].short}{PARAM_META[p].unit ? ` (${PARAM_META[p].unit})` : ""}</th>)}
                 <th className="px-2 py-1.5" />
               </tr>
             </thead>
             <tbody>
               {entries.map((e, idx) => (
-                <EntryRow key={e.id} entry={e} points={system.points} params={params}
+                <EntryRow key={e.id} entry={e} masterPoints={masterPoints} params={params}
                   readOnly={!canInput}
                   canDelete={canDeleteExisting || !isExistingRow(e)}
                   onChange={(next) => { const c = entries.slice(); c[idx] = next; setEntries(c); }}
@@ -588,6 +629,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
               <thead>
                 <tr className="border border-slate-300 bg-slate-50 text-left uppercase tracking-wide text-slate-500">
                   <th className="border border-slate-300 px-2 py-1.5">Titik Sampling</th>
+                  <th className="border border-slate-300 px-2 py-1.5">Nama Ruangan</th>
                   {params.map((p) => (
                     <th key={p} className="border border-slate-300 px-2 py-1.5">{PARAM_META[p].short}{PARAM_META[p].unit ? ` (${PARAM_META[p].unit})` : ""}</th>
                   ))}
@@ -596,7 +638,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
               </thead>
               <tbody>
                 {pointsThisDate.length === 0 ? (
-                  <tr><td colSpan={params.length + 2} className="border border-slate-300 px-2 py-3 text-center text-slate-400">Belum ada data untuk tanggal ini.</td></tr>
+                  <tr><td colSpan={params.length + 3} className="border border-slate-300 px-2 py-3 text-center text-slate-400">Belum ada data untuk tanggal ini.</td></tr>
                 ) : pointsThisDate.map((e) => {
                   let maxLevel = 0;
                   params.forEach((p) => { const st = statusFor(e[p], p); if (st.level > maxLevel) maxLevel = st.level; });
@@ -604,6 +646,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
                   return (
                     <tr key={e.id}>
                       <td className="border border-slate-300 px-2 py-1.5 font-medium">{e.titikSampling}</td>
+                      <td className="border border-slate-300 px-2 py-1.5">{e.namaRuangan || "-"}</td>
                       {params.map((p) => <td key={p} className="border border-slate-300 px-2 py-1.5 text-center">{displayValue(e[p])}</td>)}
                       <td className={`border border-slate-300 px-2 py-1.5 text-center font-semibold ${ket === "TMS" ? "text-red-600" : "text-emerald-600"}`}>{ket}</td>
                     </tr>
@@ -708,6 +751,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [entries, setEntries] = useState([]);
+  const [masterPoints, setMasterPoints] = useState([]);
   const [narrative, setNarrative] = useState(emptyNarrative());
   const [signoff, setSignoff] = useState(emptySignoff());
   const [saving, setSaving] = useState(false);
@@ -722,12 +766,14 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       setLoading(true);
       setLoadError("");
       try {
-        const [ent, rep] = await Promise.all([
+        const [ent, rep, pts] = await Promise.all([
           fetchEntries(systemKey, monthKey),
           fetchReport(systemKey, monthKey),
+          fetchMaster(systemKey),
         ]);
         if (cancelled) return;
         setEntries(ent.map((e) => ({ ...e, id: e.id || uid() })));
+        setMasterPoints(pts);
         if (rep.found) {
           setNarrative({ ...emptyNarrative(), ...rep.narrative });
           setSignoff(rep.signoff || emptySignoff());
@@ -816,8 +862,15 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
   async function handleGenerateNarrative(useAI = true) {
     setGenerating(true);
     setAiError("");
+    let prevEntries = [];
+    try {
+      const prevRes = await fetchEntries(systemKey, prevMonthKey(monthKey));
+      prevEntries = prevRes || [];
+    } catch {
+      // biarkan kosong — reviewTren akan otomatis menjelaskan belum ada data pembanding
+    }
     const localRes = generateLocalNarrative({
-      systemLabel: system.label, jenisAir: system.jenis, monthLabel: monthLabel(monthKey), entries,
+      systemLabel: system.label, jenisAir: system.jenis, monthLabel: monthLabel(monthKey), entries, prevEntries,
     });
 
     if (!useAI) {
@@ -832,6 +885,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
 
     try {
       const stats = buildStatsSummary(system, entries);
+      const prevStats = prevEntries.length > 0 ? buildStatsSummary(system, prevEntries) : null;
       let prevSummary = "Tidak ada data periode sebelumnya.";
       try {
         const prevRep = await fetchReport(systemKey, prevMonthKey(monthKey));
@@ -840,12 +894,12 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
         // biarkan default
       }
       const parsed = await generateNarrative({
-        systemLabel: system.label, jenisAir: system.jenis, monthLabel: monthLabel(monthKey), stats, prevSummary,
+        systemLabel: system.label, jenisAir: system.jenis, monthLabel: monthLabel(monthKey), stats, prevStats, prevSummary,
       });
       setNarrative((prev) => ({
         ...prev, pendahuluan: localRes.pendahuluan,
         perParameter: { ...prev.perParameter, ...parsed.perParameter },
-        reviewTren: localRes.reviewTren, kesimpulan: parsed.kesimpulan || localRes.kesimpulan,
+        reviewTren: parsed.reviewTren || localRes.reviewTren, kesimpulan: parsed.kesimpulan || localRes.kesimpulan,
       }));
     } catch (err) {
       setNarrative((prev) => ({
@@ -931,7 +985,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       )}
 
       <div className="no-print mb-5">
-        <EntryEditor system={system} entries={entries} setEntries={setEntries} onSave={saveEntriesOnly} saving={saving}
+        <EntryEditor system={system} masterPoints={masterPoints} entries={entries} setEntries={setEntries} onSave={saveEntriesOnly} saving={saving}
           canInput={canInputQC} canDeleteExisting={canDeleteQC}
           accessNote={session ? "Staff/Supervisor/Manager QC atau Supervisor/Manager QA yang bisa mengisi data" : "Login untuk mengisi data"} />
       </div>

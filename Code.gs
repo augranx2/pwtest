@@ -16,14 +16,26 @@
  *   User_Roles       : Nama | Role | Departemen | Username | PasswordBaru | PasswordHash | Salt
  *   Sessions         : Token | Username | Nama | Role | Departemen | LoginAt | ExpiresAt
  *   Audit_Log        : Waktu | Username | Nama | Role | Departemen | Aksi | Sistem | Bulan | Detail
- *   Entries          : System | Tanggal | TitikSampling | Kejernihan | Warna | Bau |
- *                       Konduktivitas | pH | TOC | Mikrobiologi | Endotoksin |
- *                       NoKontrolMedia | NoKontrolBakteri
  *   Pengkajian_Narasi: System | Bulan | Pendahuluan | PerParameterJSON | ReviewTren |
  *                       Kesimpulan | DinilaiNama | DinilaiJabatan | DinilaiTanggal |
  *                       DiperiksaNama | DiperiksaJabatan | DiperiksaTanggal | UpdatedAt
  *   Report_Hasil     : System | Tanggal | AnalisNama | AnalisUsername | AnalisTanggal |
  *                       DiperiksaNama | DiperiksaUsername | DiperiksaTanggal | UpdatedAt
+ *
+ * PLUS 2 tab per sistem (5 sistem = 10 tab tambahan), namanya harus PERSIS
+ * seperti di SYSTEMS di bawah (masterSheet & dataSheet):
+ *   <Sistem>_Master  : TitikSampling | NamaRuangan
+ *                       (database titik sampling + nama ruangan/area-nya,
+ *                       mis. "PW_NBL_Master": POU-1 | Ruang Loading Area)
+ *   <Sistem>_Data    : Tanggal | TitikSampling | NamaRuangan | Kejernihan |
+ *                       Warna | Bau | Konduktivitas | pH | TOC | Mikrobiologi |
+ *                       Endotoksin | NoKontrolMedia | NoKontrolBakteri
+ *                       (hasil pengujian mentah, 1 tab per sistem — mis.
+ *                       "PW_NBL_Data" — supaya rapi seperti di EM Viable)
+ *
+ * Kalau tab <Sistem>_Master belum dibuat/masih kosong, sistem sementara
+ * memakai daftar titik bawaan (tanpa nama ruangan) supaya tetap bisa dipakai
+ * sambil menunggu data nama ruangan lengkap menyusul.
  *
  * User_Roles, Sessions, Audit_Log, dan sistem login/role-nya PERSIS SAMA
  * dengan EM Viable (5 role: Staff, Supervisor, Manager, Assistant Manager,
@@ -40,28 +52,28 @@
 // ---------------------------------------------------------------------------
 const SYSTEMS = {
   pw_nbl: {
-    jenis: "PW", label: "Purified Water — NBL", fasilitas: "Looping Non Betalaktam (NBL)",
-    points: ["SV 49-03C", "SV 60-03C",
+    jenis: "PW", label: "Purified Water — NBL", masterSheet: "PW_NBL_Master", dataSheet: "PW_NBL_Data",
+    defaultPoints: ["SV 49-03C", "SV 60-03C",
       "POU-1", "POU-2", "POU-3", "POU-4", "POU-5", "POU-6", "POU-7", "POU-8", "POU-9", "POU-10",
       "POU-11", "POU-12", "POU-13", "POU-14", "POU-15", "POU-16", "POU-17", "POU-18", "POU-19", "POU-20"],
   },
   pw_sefalosporin: {
-    jenis: "PW", label: "Purified Water — Sefalosporin", fasilitas: "Looping Sefalosporin",
-    points: ["SV 60-02C", "SP-23", "SP-24",
+    jenis: "PW", label: "Purified Water — Sefalosporin", masterSheet: "PW_Sefalosporin_Master", dataSheet: "PW_Sefalosporin_Data",
+    defaultPoints: ["SV 60-02C", "SP-23", "SP-24",
       "POU-01", "POU-02", "POU-03", "POU-04", "POU-05", "POU-06", "POU-07", "POU-08", "POU-09", "POU-10",
       "POU-11", "POU-12", "POU-13", "POU-14", "POU-15", "POU-16", "POU-17", "POU-18", "POU-19", "POU-20"],
   },
   pw_betalaktam: {
-    jenis: "PW", label: "Purified Water — Betalaktam", fasilitas: "Looping Betalaktam (BL)",
-    points: ["POU-1", "POU-2"],
+    jenis: "PW", label: "Purified Water — Betalaktam", masterSheet: "PW_Betalaktam_Master", dataSheet: "PW_Betalaktam_Data",
+    defaultPoints: ["POU-1", "POU-2"],
   },
   wfi_sefalosporin: {
-    jenis: "WFI", label: "Water For Injection — Sefalosporin", fasilitas: "Looping Sefalosporin",
-    points: ["Tank WFI", "POU-1", "POU-2", "POU-3", "Return WFI"],
+    jenis: "WFI", label: "Water For Injection — Sefalosporin", masterSheet: "WFI_Sefalosporin_Master", dataSheet: "WFI_Sefalosporin_Data",
+    defaultPoints: ["Tank WFI", "POU-1", "POU-2", "POU-3", "Return WFI"],
   },
   ps_sefalosporin_steril: {
-    jenis: "Pure Steam", label: "Pure Steam — Sefalosporin Steril", fasilitas: "Sefalosporin Steril",
-    points: ["PS-1"],
+    jenis: "Pure Steam", label: "Pure Steam — Sefalosporin Steril", masterSheet: "PureSteam_SefaSteril_Master", dataSheet: "PureSteam_SefaSteril_Data",
+    defaultPoints: ["PS-1"],
   },
 };
 
@@ -97,7 +109,6 @@ const LIMITS = {
 const USER_ROLES_SHEET = "User_Roles";
 const SESSIONS_SHEET = "Sessions";
 const AUDIT_LOG_SHEET = "Audit_Log";
-const ENTRIES_SHEET = "Entries";
 const NARRATIVE_SHEET = "Pengkajian_Narasi";
 const REPORT_HASIL_SHEET = "Report_Hasil";
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000; // 8 jam
@@ -366,9 +377,14 @@ function logout_(token) {
   if (!sheet) return { ok: true };
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return { ok: true };
-  const values = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  const values = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
   for (let i = values.length - 1; i >= 0; i--) {
     if (String(values[i][0]) === String(token)) {
+      const row = values[i];
+      writeAuditLog_({
+        username: row[1], nama: row[2], role: row[3], departemen: row[4],
+        aksi: "Logout", sistem: "", bulan: "", detail: "",
+      });
       sheet.deleteRow(i + 2);
     }
   }
@@ -456,29 +472,60 @@ function getActivityLog_(token, month, systemLabel) {
 // ---------------------------------------------------------------------------
 // MASTER TITIK SAMPLING  (tetap/hardcoded per sistem, lihat SYSTEMS di atas)
 // ---------------------------------------------------------------------------
+// Tab per sistem, misal "PW_NBL_Master". Kolom: A TitikSampling | B NamaRuangan
+// Baris 1 = judul kolom, data mulai baris 2. Kalau tab ini belum dibuat atau
+// masih kosong, sistem sementara pakai daftar titik bawaan (defaultPoints)
+// tanpa nama ruangan, supaya web app tetap bisa dipakai sambil menunggu data
+// nama ruangan lengkap diisi menyusul.
+function getMasterPoints_(systemKey) {
+  const cfg = SYSTEMS[systemKey];
+  if (!cfg) return [];
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg.masterSheet);
+  if (!sheet) return (cfg.defaultPoints || []).map(function (p) { return { code: p, name: "" }; });
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return (cfg.defaultPoints || []).map(function (p) { return { code: p, name: "" }; });
+  const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  const points = [];
+  for (let i = 0; i < values.length; i++) {
+    const code = String(values[i][0] || "").trim();
+    if (!code) continue;
+    points.push({ code: code, name: String(values[i][1] || "").trim() });
+  }
+  return points.length > 0 ? points : (cfg.defaultPoints || []).map(function (p) { return { code: p, name: "" }; });
+}
+
 function getMaster_(systemKey) {
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
-  return { system: systemKey, jenis: cfg.jenis, points: cfg.points };
+  return { system: systemKey, jenis: cfg.jenis, points: getMasterPoints_(systemKey) };
+}
+
+function namaRuanganFor_(systemKey, titikCode) {
+  const points = getMasterPoints_(systemKey);
+  const found = points.find(function (p) { return p.code === titikCode; });
+  return found ? found.name : "";
 }
 
 // ---------------------------------------------------------------------------
-// ENTRIES  (tab "Entries" — semua sistem digabung, dipisahkan kolom System)
-// Kolom: A System | B Tanggal | C TitikSampling | D Kejernihan | E Warna |
-// F Bau | G Konduktivitas | H pH | I TOC | J Mikrobiologi | K Endotoksin |
-// L NoKontrolMedia | M NoKontrolBakteri
+// ENTRIES — 1 tab per sistem (misal "PW_NBL_Data"), seperti data per fasilitas
+// di EM Viable. Kolom: A Tanggal | B TitikSampling | C NamaRuangan |
+// D Kejernihan | E Warna | F Bau | G Konduktivitas | H pH | I TOC |
+// J Mikrobiologi | K Endotoksin | L NoKontrolMedia | M NoKontrolBakteri
 // ---------------------------------------------------------------------------
-function getEntriesSheet_() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ENTRIES_SHEET);
-  if (!sheet) throw new Error("Tab '" + ENTRIES_SHEET + "' tidak ditemukan.");
+function getEntriesSheet_(systemKey) {
+  const cfg = SYSTEMS[systemKey];
+  if (!cfg) throw new Error("Sistem tidak dikenal: " + systemKey);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(cfg.dataSheet);
+  if (!sheet) throw new Error("Tab '" + cfg.dataSheet + "' tidak ditemukan.");
   return sheet;
 }
 
 function rowToEntry_(row, idx) {
   return {
     id: "row-" + idx,
-    tanggal: formatDate_(row[1]),
-    titikSampling: row[2] || "",
+    tanggal: formatDate_(row[0]),
+    titikSampling: row[1] || "",
+    namaRuangan: row[2] || "",
     kejernihan: row[3] || "",
     warna: row[4] || "",
     bau: row[5] || "",
@@ -495,31 +542,32 @@ function rowToEntry_(row, idx) {
 function getEntries_(systemKey, month) {
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
-  const sheet = getEntriesSheet_();
+  const sheet = getEntriesSheet_(systemKey);
   const values = sheet.getDataRange().getValues();
   const entries = [];
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
-    if (String(row[0] || "").trim() !== systemKey) continue;
-    if (month && formatMonth_(row[1]) !== month) continue;
+    if (!row[0] && !row[1]) continue;
+    if (month && formatMonth_(row[0]) !== month) continue;
     entries.push(rowToEntry_(row, i));
   }
   return { system: systemKey, month: month, entries: entries };
 }
 
 function saveEntries_(systemKey, month, entries) {
-  const sheet = getEntriesSheet_();
+  const sheet = getEntriesSheet_(systemKey);
   const values = sheet.getDataRange().getValues();
   const kept = [];
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
-    const rowSystem = String(row[0] || "").trim();
-    if (rowSystem === systemKey && formatMonth_(row[1]) === month) continue; // dibuang, diganti data baru
+    if (!row[0] && !row[1]) continue;
+    if (formatMonth_(row[0]) === month) continue; // dibuang, diganti data baru
     kept.push(row);
   }
   const newRows = entries.map(function (e) {
+    const namaRuangan = e.namaRuangan || namaRuanganFor_(systemKey, e.titikSampling);
     return [
-      systemKey, e.tanggal || "", e.titikSampling || "",
+      e.tanggal || "", e.titikSampling || "", namaRuangan,
       e.kejernihan || "", e.warna || "", e.bau || "",
       e.konduktivitas === null || e.konduktivitas === undefined ? "" : e.konduktivitas,
       e.ph === null || e.ph === undefined ? "" : e.ph,
