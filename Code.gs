@@ -21,6 +21,19 @@
  *                       DiperiksaNama | DiperiksaJabatan | DiperiksaTanggal | UpdatedAt
  *   Report_Hasil     : System | Tanggal | AnalisNama | AnalisUsername | AnalisTanggal |
  *                       DiperiksaNama | DiperiksaUsername | DiperiksaTanggal | UpdatedAt
+ *   Kontrol_Mingguan : WeekKey | System | NoKontrolMedia | NoKontrolBakteri |
+ *                       KontrolPositif | KontrolNegatif | UpdatedBy | UpdatedAt
+ *                       (Nomor Kontrol Media/Bakteri + hasil Kontrol Positif/
+ *                       Negatif diisi SEKALI PER MINGGU, bukan per baris data.
+ *                       Baris dengan System KOSONG = nilai default yang
+ *                       berlaku untuk SEMUA sistem minggu itu; baris dengan
+ *                       System diisi = pengecualian/override khusus sistem
+ *                       itu saja untuk minggu yang sama. WeekKey berformat
+ *                       "yyyy-MM-Wn", 1 minggu = Senin-Jumat; kalau Senin-
+ *                       Jumat itu memotong 2 bulan, hari-harinya dipecah:
+ *                       ikut minggu TERAKHIR bulan sebelumnya / minggu
+ *                       PERTAMA bulan berikutnya, sesuai bulan kalendernya
+ *                       masing-masing.)
  *
  * PLUS 2 tab per sistem (5 sistem = 10 tab tambahan), namanya harus PERSIS
  * seperti di SYSTEMS di bawah (masterSheet & dataSheet):
@@ -78,29 +91,44 @@ const SYSTEMS = {
 };
 
 // Parameter yang dievaluasi tiap jenis air. PW tidak ada Endotoksin.
+// (Kontrol Positif/Kontrol Negatif TIDAK lagi di sini — sekarang jadi data
+// MINGGUAN terpisah di tab Kontrol_Mingguan, karena berlaku untuk SEMUA
+// sistem termasuk PW, mengikuti Nomor Kontrol Media/Bakteri minggu itu.)
 const PARAMS_BY_JENIS = {
-  PW: ["konduktivitas", "ph", "toc", "mikrobiologi"],
-  WFI: ["konduktivitas", "ph", "toc", "mikrobiologi", "endotoksin"],
-  "Pure Steam": ["konduktivitas", "ph", "toc", "mikrobiologi", "endotoksin"],
+  PW: ["kejernihan", "warna", "bau", "konduktivitas", "ph", "toc", "mikrobiologi"],
+  WFI: ["kejernihan", "warna", "bau", "konduktivitas", "ph", "toc", "mikrobiologi", "endotoksin"],
+  "Pure Steam": ["kejernihan", "warna", "bau", "konduktivitas", "ph", "toc", "mikrobiologi", "endotoksin"],
 };
 
 const PARAM_META = {
+  kejernihan: { label: "Kejernihan", unit: "", short: "Kejernihan" },
+  warna: { label: "Warna", unit: "", short: "Warna" },
+  bau: { label: "Bau", unit: "", short: "Bau" },
   konduktivitas: { label: "Konduktivitas", unit: "µS/cm", short: "Konduktivitas" },
   ph: { label: "pH", unit: "", short: "pH" },
   toc: { label: "Total Organic Carbon (TOC)", unit: "ppb", short: "TOC" },
   mikrobiologi: { label: "Cemaran Mikrobiologi", unit: "CFU/mL", short: "Mikrobiologi" },
   endotoksin: { label: "Endotoksin", unit: "EU/mL", short: "Endotoksin" },
+  kontrolPositif: { label: "Kontrol Positif", unit: "", short: "Kontrol Positif" },
+  kontrolNegatif: { label: "Kontrol Negatif", unit: "", short: "Kontrol Negatif" },
 };
 
 // Persyaratan/Alert/Action — SAMA untuk semua fasilitas & jenis air (PW/WFI/
 // Pure Steam), sesuai contoh Pengkajian yang dilampirkan. pH punya batas
 // bawah MAUPUN atas (beda dari EM Viable yang cuma 1 arah).
+// kontrolPositif/kontrolNegatif dipakai untuk menilai deviasi Kontrol
+// Mingguan (getStatusIndex_), bukan parameter per-entri lagi.
 const LIMITS = {
+  kejernihan: { qualitative: true, passValue: "Jernih" },
+  warna: { qualitative: true, passValue: "Tidak Berwarna" },
+  bau: { qualitative: true, passValue: "Tidak Berbau" },
   konduktivitas: { syaratMax: 2.1, alertMax: 1.67, actionMax: 1.94 },
   toc: { syaratMax: 500, alertMax: 375, actionMax: 450 },
   ph: { syaratMin: 5.00, syaratMax: 7.00, alertMin: 5.39, actionMin: 5.10, alertMax: 6.52, actionMax: 6.80 },
   mikrobiologi: { syaratMax: 100, alertMax: 65, actionMax: 89 },
   endotoksin: { qualitative: true, passValue: "Negatif" },
+  kontrolPositif: { qualitative: true, passValue: "Positif" },
+  kontrolNegatif: { qualitative: true, passValue: "Negatif" },
 };
 
 // ---------------------------------------------------------------------------
@@ -111,6 +139,7 @@ const SESSIONS_SHEET = "Sessions";
 const AUDIT_LOG_SHEET = "Audit_Log";
 const NARRATIVE_SHEET = "Pengkajian_Narasi";
 const REPORT_HASIL_SHEET = "Report_Hasil";
+const KONTROL_MINGGUAN_SHEET = "Kontrol_Mingguan";
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000; // 8 jam
 const ROLE_LEVEL = { Staff: 1, Supervisor: 2, Manager: 3, "Assistant Manager": 3, Administrator: 4 };
 
@@ -143,6 +172,9 @@ function doGet(e) {
         break;
       case "reportHasil":
         result = getReportHasil_(e.parameter.system, e.parameter.tanggal);
+        break;
+      case "kontrolMingguan":
+        result = getKontrolMingguan_();
         break;
       default:
         result = { error: "Aksi tidak dikenal: " + action };
@@ -197,6 +229,11 @@ function doPost(e) {
       case "approveReportHasil":
         result = withAuth_(body.token, function (session) {
           return approveReportHasilAuthed_(session, body.system, body.tanggal);
+        });
+        break;
+      case "saveKontrolMingguan":
+        result = withAuth_(body.token, function (session) {
+          return saveKontrolMingguanAuthed_(session, body.records || []);
         });
         break;
       default:
@@ -848,6 +885,131 @@ function approveReportHasilAuthed_(session, systemKey, tanggal) {
 }
 
 // ---------------------------------------------------------------------------
+// KONTROL MINGGUAN (tab "Kontrol_Mingguan") — Nomor Kontrol Media/Bakteri &
+// hasil Kontrol Positif/Negatif, diisi 1x per minggu, berlaku untuk semua
+// sistem kecuali diberi pengecualian/override khusus sistem tertentu.
+// ---------------------------------------------------------------------------
+
+// Senin dari minggu yang memuat tanggal (y, m0=bulan 0-indeks, d).
+function mondayOf_(y, m0, d) {
+  const dt = new Date(y, m0, d);
+  const dow = dt.getDay(); // 0=Minggu..6=Sabtu
+  const diff = dow === 0 ? -6 : 1 - dow;
+  return new Date(y, m0, d + diff);
+}
+
+function ymdKey_(dt) {
+  return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
+}
+
+// Hitung kunci minggu (WeekKey) untuk tanggal ISO (yyyy-mm-dd), dengan aturan:
+// 1 minggu = blok Senin-Jumat; kalau blok itu memotong 2 bulan, hari-harinya
+// dianggap ikut minggu TERAKHIR bulan sebelumnya / minggu PERTAMA bulan
+// berikutnya sesuai bulan kalender masing-masing hari itu sendiri.
+function weekKeyForISO_(iso) {
+  if (!iso) return null;
+  const parts = String(iso).split("-").map(Number);
+  const y = parts[0], m0 = parts[1] - 1, day = parts[2];
+  if (!y || !parts[1] || !day) return null;
+  const daysInMonth = new Date(y, m0 + 1, 0).getDate();
+  const seen = [];
+  let myBlockKey = null;
+  for (let dd = 1; dd <= daysInMonth; dd++) {
+    const dow = new Date(y, m0, dd).getDay(); // 0=Minggu..6=Sabtu
+    const blockKey = ymdKey_(mondayOf_(y, m0, dd));
+    // Cuma hari kerja (Senin-Jumat) yang dihitung sebagai penentu nomor
+    // minggu — akhir pekan yang "menempel" ke blok bulan sebelumnya tidak
+    // boleh menggeser nomor minggu kerja berikutnya.
+    if (dow >= 1 && dow <= 5 && seen.indexOf(blockKey) === -1) seen.push(blockKey);
+    if (dd === day) myBlockKey = blockKey;
+  }
+  const weekNum = seen.indexOf(myBlockKey) + 1;
+  return y + "-" + String(m0 + 1).padStart(2, "0") + "-W" + weekNum;
+}
+
+function getKontrolMingguan_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(KONTROL_MINGGUAN_SHEET);
+  if (!sheet) return { records: [] };
+  const values = sheet.getDataRange().getValues();
+  const records = [];
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (!row[0]) continue;
+    records.push({
+      weekKey: String(row[0] || "").trim(),
+      system: String(row[1] || "").trim(), // "" = default berlaku semua sistem
+      noKontrolMedia: row[2] || "",
+      noKontrolBakteri: row[3] || "",
+      kontrolPositif: row[4] || "",
+      kontrolNegatif: row[5] || "",
+      updatedBy: row[6] || "",
+      updatedAt: formatDate_(row[7]) || row[7] || "",
+    });
+  }
+  return { records: records };
+}
+
+// Cari record yang berlaku untuk (weekKey, systemKey): override sistem itu
+// kalau ada, kalau tidak pakai nilai default (system kosong) minggu itu.
+function findKontrolMingguan_(records, weekKey, systemKey) {
+  let override = null;
+  let def = null;
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i];
+    if (r.weekKey !== weekKey) continue;
+    if (r.system === systemKey) override = r;
+    else if (r.system === "") def = r;
+  }
+  return override || def || null;
+}
+
+function saveKontrolMingguanAuthed_(session, records) {
+  const isQCInput = requireRole_(session, "Staff", "QC");
+  const isQAInput = requireRole_(session, "Supervisor", "QA");
+  if (!isQCInput && !isQAInput) {
+    return { error: "Hanya Staff/Supervisor/Manager QC, atau Supervisor/Manager QA, yang boleh mengisi Kontrol Mingguan." };
+  }
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(KONTROL_MINGGUAN_SHEET);
+  if (!sheet) return { error: "Tab tidak ditemukan: " + KONTROL_MINGGUAN_SHEET };
+
+  const values = sheet.getDataRange().getValues();
+  const now = new Date();
+  (records || []).forEach(function (rec) {
+    const weekKey = String(rec.weekKey || "").trim();
+    const system = String(rec.system || "").trim();
+    if (!weekKey) return;
+    let foundRow = -1;
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i];
+      if (String(row[0] || "").trim() === weekKey && String(row[1] || "").trim() === system) {
+        foundRow = i + 1; // baris sheet (1-indeks)
+        break;
+      }
+    }
+    const rowData = [
+      weekKey, system,
+      rec.noKontrolMedia || "", rec.noKontrolBakteri || "",
+      rec.kontrolPositif || "", rec.kontrolNegatif || "",
+      session.nama || session.username || "", now,
+    ];
+    if (foundRow > 0) {
+      sheet.getRange(foundRow, 1, 1, 8).setValues([rowData]);
+      values[foundRow - 1] = rowData;
+    } else {
+      sheet.appendRow(rowData);
+      values.push(rowData);
+    }
+  });
+
+  writeAuditLog_({
+    username: session.username, nama: session.nama, role: session.role, departemen: session.departemen,
+    aksi: "Simpan Kontrol Mingguan", sistem: "-", bulan: "-",
+    detail: (records || []).length + " baris kontrol mingguan tersimpan",
+  });
+  return { ok: true, saved: (records || []).length };
+}
+
+// ---------------------------------------------------------------------------
 // STATUS INDEX  (untuk halaman dashboard rekap 5 sistem)
 // ---------------------------------------------------------------------------
 function parseNumericValue_(rawValue) {
@@ -891,17 +1053,31 @@ function levelFor_(rawValue, parameter) {
 
 function getStatusIndex_(month) {
   const out = {};
+  const kontrolRecords = getKontrolMingguan_().records || [];
   Object.keys(SYSTEMS).forEach(function (key) {
     const cfg = SYSTEMS[key];
     const res = getEntries_(key, month);
     const entries = res.entries || [];
     let maxLevel = 0;
     const params = PARAMS_BY_JENIS[cfg.jenis] || [];
+    const weekKeysThisMonth = {};
     entries.forEach(function (e) {
       params.forEach(function (p) {
         const lvl = levelFor_(e[p], p);
         if (lvl > maxLevel) maxLevel = lvl;
       });
+      const wk = weekKeyForISO_(e.tanggal);
+      if (wk) weekKeysThisMonth[wk] = true;
+    });
+    // Deviasi Kontrol Mingguan (Kontrol Positif harus Positif, Kontrol
+    // Negatif harus Negatif) untuk minggu-minggu yang datanya ada di bulan ini.
+    Object.keys(weekKeysThisMonth).forEach(function (wk) {
+      const rec = findKontrolMingguan_(kontrolRecords, wk, key);
+      if (!rec) return;
+      const lvlPos = levelFor_(rec.kontrolPositif, "kontrolPositif");
+      const lvlNeg = levelFor_(rec.kontrolNegatif, "kontrolNegatif");
+      if (lvlPos > maxLevel) maxLevel = lvlPos;
+      if (lvlNeg > maxLevel) maxLevel = lvlNeg;
     });
     out[key] = { level: maxLevel, hasData: entries.length > 0 };
   });

@@ -4,26 +4,97 @@
 // tertinggi/terendah, perbandingan ke Alert/Action Limit, dan interpretasi).
 
 const PARAM_META = {
-  konduktivitas: { label: "Konduktivitas", short: "konduktivitas", unit: "µS/cm", huruf: "A" },
-  ph: { label: "pH", short: "pH", unit: "", huruf: "B" },
-  toc: { label: "Total Organic Carbon (TOC)", short: "TOC", unit: "ppb", huruf: "C" },
-  mikrobiologi: { label: "Cemaran Mikrobiologi", short: "cemaran mikrobiologi", unit: "CFU/mL", huruf: "D" },
-  endotoksin: { label: "Endotoksin", short: "endotoksin", unit: "EU/mL", huruf: "E" },
+  kejernihan: { label: "Kejernihan", short: "Kejernihan", unit: "", huruf: "A" },
+  warna: { label: "Warna", short: "Warna", unit: "", huruf: "B" },
+  bau: { label: "Bau", short: "Bau", unit: "", huruf: "C" },
+  konduktivitas: { label: "Konduktivitas", short: "Konduktivitas", unit: "µS/cm", huruf: "D" },
+  ph: { label: "pH", short: "pH", unit: "", huruf: "E" },
+  toc: { label: "Total Organic Carbon (TOC)", short: "TOC", unit: "ppb", huruf: "F" },
+  mikrobiologi: { label: "Cemaran Mikrobiologi", short: "Cemaran Mikrobiologi", unit: "CFU/mL", huruf: "G" },
+  endotoksin: { label: "Endotoksin", short: "Endotoksin", unit: "EU/mL", huruf: "H" },
+  kontrolPositif: { label: "Kontrol Positif", short: "Kontrol Positif", unit: "", huruf: "I" },
+  kontrolNegatif: { label: "Kontrol Negatif", short: "Kontrol Negatif", unit: "", huruf: "J" },
 };
 
+// Kontrol Positif/Kontrol Negatif TIDAK lagi per-entri di sini — sekarang
+// jadi data MINGGUAN terpisah (lihat QUALI_OPTIONS + weekKeyForISO di bawah),
+// berlaku untuk SEMUA sistem termasuk PW (mengikuti Nomor Kontrol
+// Media/Bakteri minggu itu, sesuai kontrol uji mikrobiologi mingguan).
 const PARAMS_BY_JENIS = {
-  PW: ["konduktivitas", "ph", "toc", "mikrobiologi"],
-  WFI: ["konduktivitas", "ph", "toc", "mikrobiologi", "endotoksin"],
-  "Pure Steam": ["konduktivitas", "ph", "toc", "mikrobiologi", "endotoksin"],
+  PW: ["kejernihan", "warna", "bau", "konduktivitas", "ph", "toc", "mikrobiologi"],
+  WFI: ["kejernihan", "warna", "bau", "konduktivitas", "ph", "toc", "mikrobiologi", "endotoksin"],
+  "Pure Steam": ["kejernihan", "warna", "bau", "konduktivitas", "ph", "toc", "mikrobiologi", "endotoksin"],
 };
 
 const LIMITS = {
+  kejernihan: { qualitative: true, passValue: "Jernih" },
+  warna: { qualitative: true, passValue: "Tidak Berwarna" },
+  bau: { qualitative: true, passValue: "Tidak Berbau" },
   konduktivitas: { syaratMax: 2.1, alertMax: 1.67, actionMax: 1.94 },
   toc: { syaratMax: 500, alertMax: 375, actionMax: 450 },
   ph: { syaratMin: 5.00, syaratMax: 7.00, alertMin: 5.39, actionMin: 5.10, alertMax: 6.52, actionMax: 6.80 },
   mikrobiologi: { syaratMax: 100, alertMax: 65, actionMax: 89 },
   endotoksin: { qualitative: true, passValue: "Negatif" },
+  kontrolPositif: { qualitative: true, passValue: "Positif" },
+  kontrolNegatif: { qualitative: true, passValue: "Negatif" },
 };
+
+// Pilihan dropdown untuk setiap parameter kualitatif (dipakai saat entri data
+// di App.jsx) — opsi pertama = hasil yang sesuai persyaratan (passValue).
+const QUALI_OPTIONS = {
+  kejernihan: ["Jernih", "Tidak Jernih"],
+  warna: ["Tidak Berwarna", "Berwarna"],
+  bau: ["Tidak Berbau", "Berbau"],
+  endotoksin: ["Negatif", "Positif"],
+  kontrolPositif: ["Positif", "Negatif"],
+  kontrolNegatif: ["Negatif", "Positif"],
+};
+
+// --- KONTROL MINGGUAN: perhitungan kunci minggu (WeekKey) ------------------
+// Logikanya HARUS sama persis dengan weekKeyForISO_ di Code.gs (backend),
+// supaya minggu yang dihitung di layar (panel input) sama dengan minggu yang
+// dipakai untuk mencari status/deviasi di dashboard.
+//
+// Aturan: 1 minggu = blok Senin-Jumat. Kalau blok Senin-Jumat itu memotong 2
+// bulan, hari-harinya ikut bulan kalendernya masing-masing — jadi bisa jadi
+// minggu TERAKHIR bulan sebelumnya (untuk hari-hari di awal blok) dan minggu
+// PERTAMA bulan berikutnya (untuk hari-hari di akhir blok). Akhir pekan yang
+// "menempel" ke blok bulan sebelumnya tidak menggeser nomor minggu kerja.
+function mondayOf(y, m0, d) {
+  const dt = new Date(y, m0, d);
+  const dow = dt.getDay(); // 0=Minggu..6=Sabtu
+  const diff = dow === 0 ? -6 : 1 - dow;
+  return new Date(y, m0, d + diff);
+}
+
+function ymdKeyLocal(dt) {
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+function weekKeyForISO(iso) {
+  if (!iso) return null;
+  const parts = String(iso).split("-").map(Number);
+  const y = parts[0], m0 = parts[1] - 1, day = parts[2];
+  if (!y || !parts[1] || !day) return null;
+  const daysInMonth = new Date(y, m0 + 1, 0).getDate();
+  const seen = [];
+  let myBlockKey = null;
+  for (let dd = 1; dd <= daysInMonth; dd++) {
+    const dow = new Date(y, m0, dd).getDay();
+    const blockKey = ymdKeyLocal(mondayOf(y, m0, dd));
+    if (dow >= 1 && dow <= 5 && !seen.includes(blockKey)) seen.push(blockKey);
+    if (dd === day) myBlockKey = blockKey;
+  }
+  const weekNum = seen.indexOf(myBlockKey) + 1;
+  return { key: `${y}-${String(m0 + 1).padStart(2, "0")}-W${weekNum}`, year: y, month: m0 + 1, weekNum };
+}
+
+const MONTH_NAMES_ID = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+
+function weekLabel(wk) {
+  if (!wk) return "-";
+  return `Minggu ${wk.weekNum} — ${MONTH_NAMES_ID[wk.month - 1]} ${wk.year}`;
+}
 
 function parseNumericValue(rawValue) {
   if (rawValue === null || rawValue === undefined || rawValue === "") return null;
@@ -114,7 +185,7 @@ function paramNarrative(paramKey, entries, jenisLabel) {
     let text = `Seluruh hasil pengujian ${meta.short} pada periode ini menunjukkan hasil ${limit.passValue}, sesuai dengan persyaratan yang ditetapkan (${limit.passValue}).`;
     if (positif.length > 0) {
       const list = positif.map((p) => `${p.titik} (${fullDateID(p.tanggal)}) : ${p.raw}`).join("; ");
-      text = `Ditemukan hasil pengujian ${meta.short} dengan status Positif pada ${list}. Hasil ini tidak memenuhi persyaratan (${limit.passValue}) sehingga dikategorikan sebagai penyimpangan dan memerlukan investigasi akar masalah serta pengujian ulang segera.`;
+      text = `Ditemukan hasil pengujian ${meta.short} yang tidak sesuai pada ${list}. Hasil ini tidak memenuhi persyaratan (${limit.passValue}) sehingga dikategorikan sebagai penyimpangan dan memerlukan investigasi akar masalah serta pengujian ulang segera.`;
     }
     return `${meta.huruf}. ${meta.label}\n${text}`;
   }
@@ -253,4 +324,4 @@ export function generateLocalNarrative({ systemLabel, jenisAir, monthLabel, entr
   return { pendahuluan, perParameter, reviewTren, kesimpulan };
 }
 
-export { PARAM_META, PARAMS_BY_JENIS, LIMITS, statusFor, parseNumericValue, fullDateID };
+export { PARAM_META, PARAMS_BY_JENIS, LIMITS, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel };

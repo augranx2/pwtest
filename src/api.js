@@ -99,6 +99,15 @@ export function approveReportHasil(system, tanggal, token) {
   return apiPost({ action: "approveReportHasil", system, tanggal, token });
 }
 
+// --- KONTROL MINGGUAN (Nomor Kontrol Media/Bakteri + hasil Kontrol Positif/Negatif, per minggu) ---
+export function fetchKontrolMingguan() {
+  return apiGet({ action: "kontrolMingguan" }).then((d) => d.records || []);
+}
+
+export function saveKontrolMingguan(records, token) {
+  return apiPost({ action: "saveKontrolMingguan", records, token });
+}
+
 // Vercel Serverless Function (bukan Apps Script) — jalan di domain website sendiri,
 // jadi tidak perlu urusan CORS seperti panggilan ke Apps Script di atas.
 export async function generateNarrative({ systemLabel, jenisAir, monthLabel, stats, prevStats, prevSummary }) {

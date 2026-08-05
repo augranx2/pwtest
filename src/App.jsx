@@ -6,7 +6,7 @@ import {
 } from "recharts";
 import {
   ChevronLeft, Plus, Trash2, Printer, Loader2, Sparkles,
-  AlertTriangle, CheckCircle2, Droplet, LogIn, LogOut, User, History, Lock,
+  AlertTriangle, CheckCircle2, Droplet, LogIn, LogOut, User, History, Lock, Calendar as CalendarIcon,
 } from "lucide-react";
 import {
   fetchMaster, fetchEntries, saveEntries as apiSaveEntries,
@@ -15,8 +15,9 @@ import {
   approveMengetahui as apiApproveMengetahui, fetchActivityLog,
   fetchReportHasil, saveReportHasil as apiSaveReportHasil, approveReportHasil as apiApproveReportHasil,
   changePassword as apiChangePassword,
+  fetchKontrolMingguan, saveKontrolMingguan as apiSaveKontrolMingguan,
 } from "./api.js";
-import { generateLocalNarrative, PARAM_META, PARAMS_BY_JENIS, LIMITS, statusFor, parseNumericValue, fullDateID } from "./narrativeGenerator.js";
+import { generateLocalNarrative, PARAM_META, PARAMS_BY_JENIS, LIMITS, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel } from "./narrativeGenerator.js";
 import { useAuth, hasAccess } from "./auth.js";
 
 // Sistem air TETAP (harus persis sinkron dengan SYSTEMS di Code.gs)
@@ -35,6 +36,20 @@ function uid() {
 function todayISO() {
   const d = new Date();
   return d.toISOString().slice(0, 10);
+}
+
+// Tambah N hari ke tanggal ISO (yyyy-mm-dd) tanpa masalah timezone/UTC —
+// dipakai untuk menghitung Tanggal Baca (Tanggal Pemeriksaan + 3 hari).
+function addDaysISO(iso, days) {
+  if (!iso) return "";
+  const [y, m, d] = String(iso).split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + days);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
 }
 
 const MONTHS_ID_FULL = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
@@ -102,22 +117,117 @@ function idToISO(text) {
 }
 function DateInputID({ value, onChange, disabled, className }) {
   const [text, setText] = useState(isoToID(value));
+  const [open, setOpen] = useState(false);
+  const [viewYM, setViewYM] = useState(() => {
+    const iso = value || todayISO();
+    const [y, m] = iso.split("-");
+    return { y: Number(y), m: Number(m) - 1 };
+  });
+  const wrapRef = useRef(null);
+
   useEffect(() => { setText(isoToID(value)); }, [value]);
+
+  // Klik di luar kalender otomatis menutupnya.
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(ev) {
+      if (wrapRef.current && !wrapRef.current.contains(ev.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  function openCalendar() {
+    if (disabled) return;
+    const iso = value || idToISO(text) || todayISO();
+    const [y, m] = iso.split("-");
+    setViewYM({ y: Number(y), m: Number(m) - 1 });
+    setOpen(true);
+  }
+
+  function shiftMonth(delta) {
+    setViewYM((v) => {
+      let m = v.m + delta;
+      let y = v.y;
+      if (m < 0) { m = 11; y -= 1; }
+      if (m > 11) { m = 0; y += 1; }
+      return { y, m };
+    });
+  }
+
+  function pickDay(d) {
+    const iso = `${viewYM.y}-${String(viewYM.m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    onChange(iso);
+    setOpen(false);
+  }
+
+  const daysInMonth = new Date(viewYM.y, viewYM.m + 1, 0).getDate();
+  const firstDow = new Date(viewYM.y, viewYM.m, 1).getDay(); // 0=Minggu
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
   return (
-    <input
-      type="text"
-      inputMode="numeric"
-      placeholder="dd/mm/yyyy"
-      disabled={disabled}
-      value={text}
-      onChange={(ev) => {
-        const t = ev.target.value;
-        setText(t);
-        const iso = idToISO(t);
-        if (iso) onChange(iso);
-      }}
-      className={className}
-    />
+    <div className="relative inline-block" ref={wrapRef}>
+      <div className="relative">
+        <input
+          type="text"
+          inputMode="numeric"
+          placeholder="dd/mm/yyyy"
+          disabled={disabled}
+          value={text}
+          onFocus={openCalendar}
+          onClick={openCalendar}
+          onChange={(ev) => {
+            const t = ev.target.value;
+            setText(t);
+            const iso = idToISO(t);
+            if (iso) onChange(iso);
+          }}
+          className={`${className} ${disabled ? "" : "cursor-pointer pr-6"}`}
+        />
+        {!disabled && (
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={openCalendar}
+            className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            title="Buka kalender"
+          >
+            <CalendarIcon size={13} />
+          </button>
+        )}
+      </div>
+      {open && !disabled && (
+        <div className="only-screen absolute z-50 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-2.5 text-left shadow-lg">
+          <div className="mb-2 flex items-center justify-between">
+            <button type="button" onClick={() => shiftMonth(-1)} className="rounded px-1.5 py-0.5 text-slate-500 hover:bg-slate-100">‹</button>
+            <span className="text-xs font-semibold text-slate-700">{MONTHS_ID_FULL[viewYM.m]} {viewYM.y}</span>
+            <button type="button" onClick={() => shiftMonth(1)} className="rounded px-1.5 py-0.5 text-slate-500 hover:bg-slate-100">›</button>
+          </div>
+          <div className="grid grid-cols-7 gap-0.5 text-center text-[10px] text-slate-400">
+            {["M", "S", "S", "R", "K", "J", "S"].map((d, i) => <span key={i}>{d}</span>)}
+          </div>
+          <div className="grid grid-cols-7 gap-0.5 text-center text-xs">
+            {cells.map((d, i) => {
+              if (!d) return <span key={i} />;
+              const iso = `${viewYM.y}-${String(viewYM.m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+              const isSelected = iso === value;
+              return (
+                <button
+                  type="button"
+                  key={i}
+                  onClick={() => pickDay(d)}
+                  className={`rounded py-1 hover:bg-blue-50 ${isSelected ? "bg-blue-600 text-white hover:bg-blue-600" : "text-slate-600"}`}
+                >
+                  {d}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -289,25 +399,27 @@ function EntryRow({ entry, masterPoints, params, readOnly, canDelete, onChange, 
           placeholder="Nama ruangan/area" value={entry.namaRuangan || ""}
           onChange={(ev) => onChange({ ...entry, namaRuangan: ev.target.value })} />
       </td>
-      {params.map((p) => (
-        <td key={p} className="px-2 py-1.5">
-          {p === "endotoksin" ? (
-            <select disabled={readOnly} className="w-24 rounded border border-slate-200 px-2 py-1 text-center text-sm disabled:bg-slate-50"
-              value={entry[p] || ""} onChange={(ev) => onChange({ ...entry, [p]: ev.target.value })}>
-              <option value="">-</option>
-              <option value="Negatif">Negatif</option>
-              <option value="Positif">Positif</option>
-            </select>
-          ) : (
-            <input type="text" disabled={readOnly} className="w-20 rounded border border-slate-200 px-2 py-1 text-center text-sm disabled:bg-slate-50"
-              placeholder="-" value={entry[p] === null || entry[p] === undefined ? "" : entry[p]}
-              onChange={(ev) => {
-                const raw = ev.target.value.trim();
-                onChange({ ...entry, [p]: raw === "-" ? null : raw });
-              }} />
-          )}
-        </td>
-      ))}
+      {params.map((p) => {
+        const opts = QUALI_OPTIONS[p];
+        return (
+          <td key={p} className="px-2 py-1.5">
+            {opts ? (
+              <select disabled={readOnly} className="w-32 rounded border border-slate-200 px-2 py-1 text-center text-sm disabled:bg-slate-50"
+                value={entry[p] || ""} onChange={(ev) => onChange({ ...entry, [p]: ev.target.value })}>
+                <option value="">-</option>
+                {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ) : (
+              <input type="text" disabled={readOnly} className="w-20 rounded border border-slate-200 px-2 py-1 text-center text-sm disabled:bg-slate-50"
+                placeholder="-" value={entry[p] === null || entry[p] === undefined ? "" : entry[p]}
+                onChange={(ev) => {
+                  const raw = ev.target.value.trim();
+                  onChange({ ...entry, [p]: raw === "-" ? null : raw });
+                }} />
+            )}
+          </td>
+        );
+      })}
       <td className="px-2 py-1.5 text-center">
         {canDelete && (
           <button onClick={onDelete} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-500" title="Hapus baris">
@@ -505,7 +617,7 @@ function Dashboard({ monthKey, setMonthKey, statusIndex, loadingStatus, statusEr
 }
 
 /* ========================================================================= REPORT HASIL PEMERIKSAAN (formulir QC fisik yang didigitalkan) */
-function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token, onBack }) {
+function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token, onBack, kontrolRecords = [] }) {
   const system = SYSTEMS.find((s) => s.key === systemKey);
   const params = PARAMS_BY_JENIS[system.jenis] || [];
   const [tanggal, setTanggal] = useState("");
@@ -522,6 +634,19 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
     const set = new Set(entriesForMonth.map((e) => e.tanggal).filter(Boolean));
     return Array.from(set).sort();
   }, [entriesForMonth]);
+
+  // Nomor Kontrol Media/Bakteri & hasil Kontrol Positif/Negatif diisi 1x per
+  // minggu (lihat panel "Kontrol Mingguan"), bukan per baris data — cari
+  // record minggu yang berlaku untuk tanggal formulir ini: kalau ada
+  // pengecualian/override khusus sistem ini, pakai itu; kalau tidak, pakai
+  // nilai default minggu itu.
+  const kontrolMinggu = useMemo(() => {
+    const wk = weekKeyForISO(tanggal);
+    if (!wk) return null;
+    const override = kontrolRecords.find((r) => r.weekKey === wk.key && r.system === systemKey);
+    const def = kontrolRecords.find((r) => r.weekKey === wk.key && r.system === "");
+    return { wk, rec: override || def || null };
+  }, [tanggal, kontrolRecords, systemKey]);
 
   useEffect(() => {
     if (!tanggal && availableDates.length > 0) setTanggal(availableDates[availableDates.length - 1]);
@@ -622,6 +747,12 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
           <div className="mb-4 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
             <p><span className="text-slate-500">Sistem</span> : <span className="font-medium">{system.label}</span></p>
             <p><span className="text-slate-500">Tanggal Pemeriksaan</span> : <span className="font-medium">{fullDateID(tanggal)}</span></p>
+            <p><span className="text-slate-500">Tanggal Baca</span> : <span className="font-medium">{fullDateID(addDaysISO(tanggal, 3))}</span></p>
+            <p><span className="text-slate-500">Minggu Sampling</span> : <span className="font-medium">{kontrolMinggu?.wk ? weekLabel(kontrolMinggu.wk) : "-"}</span></p>
+            <p><span className="text-slate-500">No. Kontrol Media</span> : <span className="font-medium">{kontrolMinggu?.rec?.noKontrolMedia || "-"}</span></p>
+            <p><span className="text-slate-500">No. Kontrol Bakteri</span> : <span className="font-medium">{kontrolMinggu?.rec?.noKontrolBakteri || "-"}</span></p>
+            <p><span className="text-slate-500">Hasil Kontrol Positif</span> : <span className={`font-medium ${kontrolMinggu?.rec?.kontrolPositif && kontrolMinggu.rec.kontrolPositif !== "Positif" ? "text-red-600" : ""}`}>{kontrolMinggu?.rec?.kontrolPositif || "-"}</span></p>
+            <p><span className="text-slate-500">Hasil Kontrol Negatif</span> : <span className={`font-medium ${kontrolMinggu?.rec?.kontrolNegatif && kontrolMinggu.rec.kontrolNegatif !== "Negatif" ? "text-red-600" : ""}`}>{kontrolMinggu?.rec?.kontrolNegatif || "-"}</span></p>
           </div>
 
           <div className="overflow-x-auto">
@@ -734,6 +865,150 @@ function emptySignoff() {
   return { dinilai: { nama: "", jabatan: "", tanggal: "" }, diperiksa: { nama: "", jabatan: "", tanggal: "" } };
 }
 
+/* ========================================================================= KONTROL MINGGUAN (Nomor Kontrol Media/Bakteri + Kontrol Positif/Negatif) */
+// Diisi 1x per minggu (bukan per baris data POU). Defaultnya SATU nomor yang
+// sama otomatis berlaku untuk semua sistem minggu itu; kalau minggu tertentu
+// nomornya beda untuk sistem ini saja, centang "Khusus sistem ini".
+function KontrolMingguanPanel({ systemKey, entries, records, canInput, saving, onSave }) {
+  const weeks = useMemo(() => {
+    const map = new Map();
+    entries.forEach((e) => {
+      if (!e.tanggal) return;
+      const wk = weekKeyForISO(e.tanggal);
+      if (wk && !map.has(wk.key)) map.set(wk.key, wk);
+    });
+    return Array.from(map.values()).sort((a, b) => (a.year - b.year) || (a.month - b.month) || (a.weekNum - b.weekNum));
+  }, [entries]);
+
+  const [rows, setRows] = useState({});
+
+  useEffect(() => {
+    setRows((prev) => {
+      const next = {};
+      weeks.forEach((wk) => {
+        const override = records.find((r) => r.weekKey === wk.key && r.system === systemKey);
+        const def = records.find((r) => r.weekKey === wk.key && r.system === "");
+        const existing = prev[wk.key];
+        const source = override || def;
+        next[wk.key] = existing || {
+          noKontrolMedia: source?.noKontrolMedia || "",
+          noKontrolBakteri: source?.noKontrolBakteri || "",
+          kontrolPositif: source?.kontrolPositif || "",
+          kontrolNegatif: source?.kontrolNegatif || "",
+          overrideThisSystem: !!override,
+          hadOverrideInitially: !!override,
+        };
+      });
+      return next;
+    });
+  }, [weeks, records, systemKey]);
+
+  function updateRow(weekKey, patch) {
+    setRows((prev) => ({ ...prev, [weekKey]: { ...prev[weekKey], ...patch } }));
+  }
+
+  function handleSaveAll() {
+    const out = [];
+    weeks.forEach((wk) => {
+      const row = rows[wk.key];
+      if (!row) return;
+      if (row.overrideThisSystem) {
+        out.push({
+          weekKey: wk.key, system: systemKey,
+          noKontrolMedia: row.noKontrolMedia, noKontrolBakteri: row.noKontrolBakteri,
+          kontrolPositif: row.kontrolPositif, kontrolNegatif: row.kontrolNegatif,
+        });
+      } else {
+        // Bukan override -> nilai berlaku sebagai default (semua sistem).
+        out.push({
+          weekKey: wk.key, system: "",
+          noKontrolMedia: row.noKontrolMedia, noKontrolBakteri: row.noKontrolBakteri,
+          kontrolPositif: row.kontrolPositif, kontrolNegatif: row.kontrolNegatif,
+        });
+        // Kalau minggu ini SEBELUMNYA punya override khusus sistem ini,
+        // tapi sekarang dilepas centangnya -> kosongkan override lamanya
+        // supaya tidak jadi data basi yang tetap dipakai (override menang
+        // dari default di findKontrolMingguan_).
+        if (row.hadOverrideInitially) {
+          out.push({ weekKey: wk.key, system: systemKey, noKontrolMedia: "", noKontrolBakteri: "", kontrolPositif: "", kontrolNegatif: "" });
+        }
+      }
+    });
+    onSave(out);
+  }
+
+  if (weeks.length === 0) return null;
+
+  return (
+    <div className="no-print mb-5 rounded-xl border border-slate-200 bg-white p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-bold text-slate-700">Kontrol Mingguan</h3>
+          <p className="text-xs text-slate-400">Nomor Kontrol Media/Bakteri &amp; hasil Kontrol Positif/Negatif — diisi 1x per minggu, otomatis berlaku untuk semua sistem kecuali dicentang khusus.</p>
+        </div>
+        {canInput && (
+          <button onClick={handleSaveAll} disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : null} Simpan Kontrol Mingguan
+          </button>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-400">
+              <th className="px-3 py-2">Minggu</th>
+              <th className="px-3 py-2">No. Kontrol Media</th>
+              <th className="px-3 py-2">No. Kontrol Bakteri</th>
+              <th className="px-3 py-2">Kontrol Positif</th>
+              <th className="px-3 py-2">Kontrol Negatif</th>
+              <th className="px-3 py-2 text-center">Khusus sistem ini</th>
+            </tr>
+          </thead>
+          <tbody>
+            {weeks.map((wk) => {
+              const row = rows[wk.key] || {};
+              return (
+                <tr key={wk.key} className="border-b border-slate-100 last:border-0">
+                  <td className="px-3 py-2 font-medium">{weekLabel(wk)}</td>
+                  <td className="px-3 py-2">
+                    <input type="text" disabled={!canInput} value={row.noKontrolMedia || ""} placeholder="-"
+                      onChange={(ev) => updateRow(wk.key, { noKontrolMedia: ev.target.value })}
+                      className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input type="text" disabled={!canInput} value={row.noKontrolBakteri || ""} placeholder="-"
+                      onChange={(ev) => updateRow(wk.key, { noKontrolBakteri: ev.target.value })}
+                      className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <select disabled={!canInput} value={row.kontrolPositif || ""} onChange={(ev) => updateRow(wk.key, { kontrolPositif: ev.target.value })}
+                      className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
+                      <option value="">-</option>
+                      {QUALI_OPTIONS.kontrolPositif.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <select disabled={!canInput} value={row.kontrolNegatif || ""} onChange={(ev) => updateRow(wk.key, { kontrolNegatif: ev.target.value })}
+                      className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
+                      <option value="">-</option>
+                      {QUALI_OPTIONS.kontrolNegatif.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <input type="checkbox" disabled={!canInput} checked={!!row.overrideThisSystem}
+                      onChange={(ev) => updateRow(wk.key, { overrideThisSystem: ev.target.checked })} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 /* ========================================================================= SYSTEM DETAIL (halaman Pengkajian SPA) */
 function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, session, token }) {
   const system = SYSTEMS.find((s) => s.key === systemKey);
@@ -759,6 +1034,9 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
   const [generating, setGenerating] = useState(false);
   const [aiError, setAiError] = useState("");
   const [approving, setApproving] = useState(false);
+  const [kontrolRecords, setKontrolRecords] = useState([]);
+  const [kontrolSaving, setKontrolSaving] = useState(false);
+  const [kontrolError, setKontrolError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -766,14 +1044,16 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       setLoading(true);
       setLoadError("");
       try {
-        const [ent, rep, pts] = await Promise.all([
+        const [ent, rep, pts, kontrol] = await Promise.all([
           fetchEntries(systemKey, monthKey),
           fetchReport(systemKey, monthKey),
           fetchMaster(systemKey),
+          fetchKontrolMingguan().catch(() => []),
         ]);
         if (cancelled) return;
         setEntries(ent.map((e) => ({ ...e, id: e.id || uid() })));
         setMasterPoints(pts);
+        setKontrolRecords(kontrol);
         if (rep.found) {
           setNarrative({ ...emptyNarrative(), ...rep.narrative });
           setSignoff(rep.signoff || emptySignoff());
@@ -817,6 +1097,22 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       setSaving(false);
     }
   }, [systemKey, monthKey, entries, token, onSaved]);
+
+  const handleSaveKontrolMingguan = useCallback(async (records) => {
+    setKontrolSaving(true);
+    setKontrolError("");
+    try {
+      const res = await apiSaveKontrolMingguan(records, token);
+      if (res.error) throw new Error(res.error);
+      const fresh = await fetchKontrolMingguan().catch(() => []);
+      setKontrolRecords(fresh);
+      onSaved && onSaved();
+    } catch (err) {
+      setKontrolError("Gagal menyimpan Kontrol Mingguan: " + err.message);
+    } finally {
+      setKontrolSaving(false);
+    }
+  }, [token, onSaved]);
 
   const saveNarrativeOnly = useCallback(async () => {
     setSaving(true);
@@ -930,7 +1226,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
   if (mode === "reportHasil") {
     return (
       <ReportHasilPanel systemKey={systemKey} entriesForMonth={entries} monthKey={monthKey}
-        session={session} token={token} onBack={() => setMode("pengkajian")} />
+        session={session} token={token} onBack={() => setMode("pengkajian")} kontrolRecords={kontrolRecords} />
     );
   }
 
@@ -989,6 +1285,10 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
           canInput={canInputQC} canDeleteExisting={canDeleteQC}
           accessNote={session ? "Staff/Supervisor/Manager QC atau Supervisor/Manager QA yang bisa mengisi data" : "Login untuk mengisi data"} />
       </div>
+
+      {kontrolError && <p className="no-print mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{kontrolError}</p>}
+      <KontrolMingguanPanel systemKey={systemKey} entries={entries} records={kontrolRecords}
+        canInput={canInputQC} saving={kontrolSaving} onSave={handleSaveKontrolMingguan} />
 
       <div className="mb-5 rounded-xl border border-slate-200 bg-white p-5 print-card">
         <h3 className="mb-3 text-sm font-bold text-slate-700">Persyaratan</h3>
