@@ -86,17 +86,17 @@ export function whoami(token) {
   return apiGet({ action: "whoami", token });
 }
 
-// --- REPORT HASIL PEMERIKSAAN (formulir QC per tanggal, digitalisasi FM.QC.063 dkk) ---
-export function fetchReportHasil(system, tanggal) {
-  return apiGet({ action: "reportHasil", system, tanggal });
+// --- REPORT HASIL PEMERIKSAAN (formulir QC 1 bulan penuh, digitalisasi FM.QC.063 dkk) ---
+export function fetchReportHasil(system, month) {
+  return apiGet({ action: "reportHasil", system, month });
 }
 
-export function saveReportHasil(system, tanggal, token) {
-  return apiPost({ action: "saveReportHasil", system, tanggal, token });
+export function saveReportHasil(system, month, token) {
+  return apiPost({ action: "saveReportHasil", system, month, token });
 }
 
-export function approveReportHasil(system, tanggal, token) {
-  return apiPost({ action: "approveReportHasil", system, tanggal, token });
+export function approveReportHasil(system, month, token) {
+  return apiPost({ action: "approveReportHasil", system, month, token });
 }
 
 // --- KONTROL MINGGUAN (Nomor Kontrol Media/Bakteri + hasil Kontrol Positif/Negatif, per minggu) ---

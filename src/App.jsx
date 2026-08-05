@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -17,7 +17,7 @@ import {
   changePassword as apiChangePassword,
   fetchKontrolMingguan, saveKontrolMingguan as apiSaveKontrolMingguan,
 } from "./api.js";
-import { generateLocalNarrative, PARAM_META, PARAMS_BY_JENIS, LIMITS, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel } from "./narrativeGenerator.js";
+import { generateLocalNarrative, PARAM_META, PARAMS_BY_JENIS, LIMITS, getLimit, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel } from "./narrativeGenerator.js";
 import { useAuth, hasAccess } from "./auth.js";
 
 // Sistem air TETAP (harus persis sinkron dengan SYSTEMS di Code.gs)
@@ -83,9 +83,7 @@ function buildVerifyUrl(params) {
 }
 
 function VerifyQR({ type, system, period, slot, size = 64 }) {
-  const params = type === "reportHasil"
-    ? { type, system, tanggal: period, slot }
-    : { type, system, month: period, slot };
+  const params = { type, system, month: period, slot };
   const url = buildVerifyUrl(params);
   return (
     <div className="flex flex-col items-center gap-1">
@@ -294,9 +292,9 @@ function StatusPill({ level, hasData }) {
 }
 
 /* ========================================================================= GRAFIK TREN PER PARAMETER */
-function ParamChart({ entries, paramKey, systemLabel }) {
+function ParamChart({ entries, paramKey, systemLabel, jenis }) {
   const meta = PARAM_META[paramKey];
-  const limit = LIMITS[paramKey];
+  const limit = getLimit(paramKey, jenis);
   if (!limit || limit.qualitative) return null;
 
   const pointCounts = {};
@@ -504,7 +502,7 @@ function systemOverallLevel(entries, jenis) {
   const params = PARAMS_BY_JENIS[jenis] || [];
   entries.forEach((e) => {
     params.forEach((p) => {
-      const st = statusFor(e[p], p);
+      const st = statusFor(e[p], p, jenis);
       if (st.level > maxLevel) maxLevel = st.level;
     });
   });
@@ -516,7 +514,7 @@ function buildStatsSummary(system, entries) {
   const stats = {};
   params.forEach((paramKey) => {
     const meta = PARAM_META[paramKey];
-    const limit = LIMITS[paramKey];
+    const limit = getLimit(paramKey, system.jenis);
     const points = entries
       .map((e) => ({ titik: e.titikSampling, tanggal: e.tanggal, raw: e[paramKey] }))
       .filter((p) => p.raw !== null && p.raw !== undefined && p.raw !== "");
@@ -528,8 +526,8 @@ function buildStatsSummary(system, entries) {
     }
 
     const numeric = points.map((p) => ({ ...p, value: parseNumericValue(p.raw) })).filter((p) => p.value !== null);
-    const noted = numeric.filter((p) => statusFor(p.raw, paramKey).level >= 2)
-      .map((p) => ({ titik: p.titik, tanggal: p.tanggal, hasil: displayValue(p.raw), level: statusFor(p.raw, paramKey).level >= 4 ? "Melebihi Syarat" : statusFor(p.raw, paramKey).level === 3 ? "Action" : "Alert" }));
+    const noted = numeric.filter((p) => statusFor(p.raw, paramKey, system.jenis).level >= 2)
+      .map((p) => ({ titik: p.titik, tanggal: p.tanggal, hasil: displayValue(p.raw), level: statusFor(p.raw, paramKey, system.jenis).level >= 4 ? "Melebihi Syarat" : statusFor(p.raw, paramKey, system.jenis).level === 3 ? "Action" : "Alert" }));
 
     stats[paramKey] = {
       label: meta.label, unit: meta.unit,
@@ -617,12 +615,15 @@ function Dashboard({ monthKey, setMonthKey, statusIndex, loadingStatus, statusEr
 }
 
 /* ========================================================================= REPORT HASIL PEMERIKSAAN (formulir QC fisik yang didigitalkan) */
-function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token, onBack, kontrolRecords = [] }) {
+function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token, onBack, kontrolRecords = [], masterPoints = [] }) {
   const system = SYSTEMS.find((s) => s.key === systemKey);
-  const params = PARAMS_BY_JENIS[system.jenis] || [];
-  const [tanggal, setTanggal] = useState("");
+  const isWFIType = system.jenis === "WFI" || system.jenis === "Pure Steam";
+  // Kolom mutu air dasar (di luar Endotoksin — Endotoksin ditempatkan manual
+  // setelah blok Kontrol Mikrobiologi/Tanggal Baca, sesuai urutan form fisik).
+  const baseParams = ["kejernihan", "warna", "bau", "konduktivitas", "ph", "toc", "mikrobiologi"];
+
   const [meta, setMeta] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -630,36 +631,13 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
   const canInput = hasAccess(session, "Staff", "QC");
   const canApprove = hasAccess(session, "Supervisor", "QC");
 
-  const availableDates = useMemo(() => {
-    const set = new Set(entriesForMonth.map((e) => e.tanggal).filter(Boolean));
-    return Array.from(set).sort();
-  }, [entriesForMonth]);
-
-  // Nomor Kontrol Media/Bakteri & hasil Kontrol Positif/Negatif diisi 1x per
-  // minggu (lihat panel "Kontrol Mingguan"), bukan per baris data — cari
-  // record minggu yang berlaku untuk tanggal formulir ini: kalau ada
-  // pengecualian/override khusus sistem ini, pakai itu; kalau tidak, pakai
-  // nilai default minggu itu.
-  const kontrolMinggu = useMemo(() => {
-    const wk = weekKeyForISO(tanggal);
-    if (!wk) return null;
-    const override = kontrolRecords.find((r) => r.weekKey === wk.key && r.system === systemKey);
-    const def = kontrolRecords.find((r) => r.weekKey === wk.key && r.system === "");
-    return { wk, rec: override || def || null };
-  }, [tanggal, kontrolRecords, systemKey]);
-
-  useEffect(() => {
-    if (!tanggal && availableDates.length > 0) setTanggal(availableDates[availableDates.length - 1]);
-  }, [availableDates, tanggal]);
-
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      if (!tanggal) return;
       setLoading(true);
       setErrorMsg("");
       try {
-        const res = await fetchReportHasil(systemKey, tanggal);
+        const res = await fetchReportHasil(systemKey, monthKey);
         if (cancelled) return;
         setMeta(res);
       } catch (err) {
@@ -670,18 +648,38 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
     }
     load();
     return () => { cancelled = true; };
-  }, [systemKey, tanggal]);
+  }, [systemKey, monthKey]);
 
-  const pointsThisDate = useMemo(
-    () => entriesForMonth.filter((e) => e.tanggal === tanggal),
-    [entriesForMonth, tanggal]
-  );
+  // Kelompokkan seluruh data bulan ini per Minggu (Senin-Jumat, aturan
+  // potong-bulan sama seperti Kontrol Mingguan) — 1 formulir = 1 bulan penuh,
+  // seperti form fisik yang punya beberapa blok "Minggu I/II/III/..." dalam
+  // 1 halaman.
+  const weeks = useMemo(() => {
+    const map = new Map();
+    entriesForMonth.forEach((e) => {
+      if (!e.tanggal) return;
+      const wk = weekKeyForISO(e.tanggal);
+      if (!wk) return;
+      if (!map.has(wk.key)) map.set(wk.key, { wk, rows: [] });
+      map.get(wk.key).rows.push(e);
+    });
+    const pointOrder = (code) => {
+      const idx = masterPoints.findIndex((p) => p.code === code);
+      return idx === -1 ? 9999 : idx;
+    };
+    const list = Array.from(map.values());
+    list.forEach((grp) => {
+      grp.rows.sort((a, b) => (a.tanggal || "").localeCompare(b.tanggal || "") || pointOrder(a.titikSampling) - pointOrder(b.titikSampling));
+    });
+    list.sort((a, b) => (a.wk.year - b.wk.year) || (a.wk.month - b.wk.month) || (a.wk.weekNum - b.wk.weekNum));
+    return list;
+  }, [entriesForMonth, masterPoints]);
 
   async function handleSave() {
     setSaving(true);
     setErrorMsg("");
     try {
-      const res = await apiSaveReportHasil(systemKey, tanggal, token);
+      const res = await apiSaveReportHasil(systemKey, monthKey, token);
       if (res.error) throw new Error(res.error);
       setMeta(res);
     } catch (err) {
@@ -695,7 +693,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
     setApproving(true);
     setErrorMsg("");
     try {
-      const res = await apiApproveReportHasil(systemKey, tanggal, token);
+      const res = await apiApproveReportHasil(systemKey, monthKey, token);
       if (res.error) throw new Error(res.error);
       setMeta(res);
     } catch (err) {
@@ -709,28 +707,27 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
   const diperiksa = meta?.diperiksa || { nama: "", tanggal: "" };
   const isApproved = !!diperiksa.nama;
 
+  // Total kolom (buat colSpan baris header "Minggu N"): Titik + Tanggal +
+  // baseParams + 4 kolom kontrol mikro + Tanggal Baca + (WFI/Pure Steam: 1
+  // Endotoksin + 6 kolom LAL/CSE) + Kesimpulan.
+  const colCount = 2 + baseParams.length + 4 + 1 + (isWFIType ? 7 : 0) + 1;
+
   return (
-    <div className="mx-auto max-w-5xl p-6 print:max-w-none print:p-0">
+    <div className="mx-auto max-w-6xl p-6 print:max-w-none print:p-0">
       <div className="no-print mb-4 flex items-center justify-between">
         <button onClick={onBack} className="inline-flex items-center gap-1 text-sm font-medium text-slate-500 hover:text-slate-700">
           <ChevronLeft size={16} /> Kembali ke Pengkajian SPA
         </button>
-        <div className="flex items-center gap-2">
-          <select value={tanggal} onChange={(ev) => setTanggal(ev.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
-            {availableDates.length === 0 && <option value="">Belum ada tanggal</option>}
-            {availableDates.map((d) => <option key={d} value={d}>{fullDateID(d)}</option>)}
-          </select>
-          <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-900">
-            <Printer size={15} /> Cetak / Download PDF
-          </button>
-        </div>
+        <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-900">
+          <Printer size={15} /> Cetak / Download PDF
+        </button>
       </div>
 
       {errorMsg && <p className="no-print mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{errorMsg}</p>}
 
       {loading ? (
         <p className="py-10 text-center text-sm text-slate-400">Memuat...</p>
-      ) : !tanggal ? (
+      ) : weeks.length === 0 ? (
         <p className="py-10 text-center text-sm text-slate-400">Belum ada data pengujian untuk periode ini. Isi dulu di halaman Input Data.</p>
       ) : (
         <div className="rounded-xl border border-slate-300 bg-white p-6 print-card">
@@ -746,41 +743,95 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
 
           <div className="mb-4 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
             <p><span className="text-slate-500">Sistem</span> : <span className="font-medium">{system.label}</span></p>
-            <p><span className="text-slate-500">Tanggal Pemeriksaan</span> : <span className="font-medium">{fullDateID(tanggal)}</span></p>
-            <p><span className="text-slate-500">Tanggal Baca</span> : <span className="font-medium">{fullDateID(addDaysISO(tanggal, 3))}</span></p>
-            <p><span className="text-slate-500">Minggu Sampling</span> : <span className="font-medium">{kontrolMinggu?.wk ? weekLabel(kontrolMinggu.wk) : "-"}</span></p>
-            <p><span className="text-slate-500">No. Kontrol Media</span> : <span className="font-medium">{kontrolMinggu?.rec?.noKontrolMedia || "-"}</span></p>
-            <p><span className="text-slate-500">No. Kontrol Bakteri</span> : <span className="font-medium">{kontrolMinggu?.rec?.noKontrolBakteri || "-"}</span></p>
-            <p><span className="text-slate-500">Hasil Kontrol Positif</span> : <span className={`font-medium ${kontrolMinggu?.rec?.kontrolPositif && kontrolMinggu.rec.kontrolPositif !== "Positif" ? "text-red-600" : ""}`}>{kontrolMinggu?.rec?.kontrolPositif || "-"}</span></p>
-            <p><span className="text-slate-500">Hasil Kontrol Negatif</span> : <span className={`font-medium ${kontrolMinggu?.rec?.kontrolNegatif && kontrolMinggu.rec.kontrolNegatif !== "Negatif" ? "text-red-600" : ""}`}>{kontrolMinggu?.rec?.kontrolNegatif || "-"}</span></p>
+            <p><span className="text-slate-500">Periode</span> : <span className="font-medium">{monthLabel(monthKey)}</span></p>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-xs">
+            <table className="w-full border-collapse text-[10.5px] leading-tight">
               <thead>
                 <tr className="border border-slate-300 bg-slate-50 text-left uppercase tracking-wide text-slate-500">
-                  <th className="border border-slate-300 px-2 py-1.5">Titik Sampling</th>
-                  <th className="border border-slate-300 px-2 py-1.5">Nama Ruangan</th>
-                  {params.map((p) => (
-                    <th key={p} className="border border-slate-300 px-2 py-1.5">{PARAM_META[p].short}{PARAM_META[p].unit ? ` (${PARAM_META[p].unit})` : ""}</th>
+                  <th className="border border-slate-300 px-1.5 py-1.5">Titik Sampling</th>
+                  <th className="border border-slate-300 px-1.5 py-1.5">Tanggal</th>
+                  {baseParams.map((p) => (
+                    <th key={p} className="border border-slate-300 px-1.5 py-1.5">{PARAM_META[p].short}{PARAM_META[p].unit ? ` (${PARAM_META[p].unit})` : ""}</th>
                   ))}
-                  <th className="border border-slate-300 px-2 py-1.5">Keterangan</th>
+                  <th className="border border-slate-300 px-1.5 py-1.5">No. Kontrol Media</th>
+                  <th className="border border-slate-300 px-1.5 py-1.5">Kontrol Negatif</th>
+                  <th className="border border-slate-300 px-1.5 py-1.5">No. Kontrol Bakteri</th>
+                  <th className="border border-slate-300 px-1.5 py-1.5">Kontrol Positif</th>
+                  <th className="border border-slate-300 px-1.5 py-1.5">Tanggal Baca</th>
+                  {isWFIType && (
+                    <>
+                      <th className="border border-slate-300 px-1.5 py-1.5">{PARAM_META.endotoksin.short} ({PARAM_META.endotoksin.unit})</th>
+                      <th className="border border-slate-300 px-1.5 py-1.5">Kontrol Negatif</th>
+                      <th className="border border-slate-300 px-1.5 py-1.5">Kontrol Positif</th>
+                      <th className="border border-slate-300 px-1.5 py-1.5">No Bet LAL</th>
+                      <th className="border border-slate-300 px-1.5 py-1.5">No Bet CSE</th>
+                      <th className="border border-slate-300 px-1.5 py-1.5">Sensitivitas LAL</th>
+                      <th className="border border-slate-300 px-1.5 py-1.5">Sensitivitas CSE</th>
+                    </>
+                  )}
+                  <th className="border border-slate-300 px-1.5 py-1.5">Kesimpulan</th>
                 </tr>
               </thead>
               <tbody>
-                {pointsThisDate.length === 0 ? (
-                  <tr><td colSpan={params.length + 3} className="border border-slate-300 px-2 py-3 text-center text-slate-400">Belum ada data untuk tanggal ini.</td></tr>
-                ) : pointsThisDate.map((e) => {
-                  let maxLevel = 0;
-                  params.forEach((p) => { const st = statusFor(e[p], p); if (st.level > maxLevel) maxLevel = st.level; });
-                  const ket = maxLevel >= 4 ? "TMS" : maxLevel === 0 ? "-" : "MS";
+                {weeks.map((grp) => {
+                  const override = kontrolRecords.find((r) => r.weekKey === grp.wk.key && r.system === systemKey);
+                  const def = kontrolRecords.find((r) => r.weekKey === grp.wk.key && r.system === "");
+                  const rec = override || def || {};
+                  // Deviasi Kontrol Mingguan berlaku untuk SEMUA baris di minggu itu
+                  // (kalau kontrolnya tidak valid, seluruh hasil minggu itu diragukan).
+                  let weekDeviates = false;
+                  if (rec.kontrolPositif && rec.kontrolPositif !== "Positif") weekDeviates = true;
+                  if (rec.kontrolNegatif && rec.kontrolNegatif !== "Negatif") weekDeviates = true;
+                  if (isWFIType) {
+                    if (rec.kontrolPositifLAL && rec.kontrolPositifLAL !== "Positif") weekDeviates = true;
+                    if (rec.kontrolNegatifLAL && rec.kontrolNegatifLAL !== "Negatif") weekDeviates = true;
+                  }
                   return (
-                    <tr key={e.id}>
-                      <td className="border border-slate-300 px-2 py-1.5 font-medium">{e.titikSampling}</td>
-                      <td className="border border-slate-300 px-2 py-1.5">{e.namaRuangan || "-"}</td>
-                      {params.map((p) => <td key={p} className="border border-slate-300 px-2 py-1.5 text-center">{displayValue(e[p])}</td>)}
-                      <td className={`border border-slate-300 px-2 py-1.5 text-center font-semibold ${ket === "TMS" ? "text-red-600" : "text-emerald-600"}`}>{ket}</td>
-                    </tr>
+                    <Fragment key={grp.wk.key}>
+                      <tr className="bg-slate-100">
+                        <td colSpan={colCount} className="border border-slate-300 px-1.5 py-1 font-semibold text-slate-600">Minggu {grp.wk.weekNum}</td>
+                      </tr>
+                      {grp.rows.map((e, idx) => {
+                        let maxLevel = weekDeviates ? 4 : 0;
+                        baseParams.forEach((p) => { const st = statusFor(e[p], p, system.jenis); if (st.level > maxLevel) maxLevel = st.level; });
+                        if (isWFIType) { const st = statusFor(e.endotoksin, "endotoksin", system.jenis); if (st.level > maxLevel) maxLevel = st.level; }
+                        const ket = maxLevel >= 4 ? "TMS" : maxLevel === 0 ? "-" : "MS";
+                        return (
+                          <tr key={e.id}>
+                            <td className="border border-slate-300 px-1.5 py-1 font-medium">{e.titikSampling}</td>
+                            <td className="border border-slate-300 px-1.5 py-1">{shortDate(e.tanggal)}</td>
+                            {baseParams.map((p) => <td key={p} className="border border-slate-300 px-1.5 py-1 text-center">{displayValue(e[p])}</td>)}
+                            {idx === 0 && (
+                              <>
+                                <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.noKontrolMedia || "-"}</td>
+                                <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.kontrolNegatif || "-"}</td>
+                                <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.noKontrolBakteri || "-"}</td>
+                                <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.kontrolPositif || "-"}</td>
+                              </>
+                            )}
+                            <td className="border border-slate-300 px-1.5 py-1 text-center">{shortDate(addDaysISO(e.tanggal, 3))}</td>
+                            {isWFIType && (
+                              <>
+                                <td className="border border-slate-300 px-1.5 py-1 text-center">{displayValue(e.endotoksin)}</td>
+                                {idx === 0 && (
+                                  <>
+                                    <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.kontrolNegatifLAL || "-"}</td>
+                                    <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.kontrolPositifLAL || "-"}</td>
+                                    <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.noBetLAL || "-"}</td>
+                                    <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.noBetCSE || "-"}</td>
+                                    <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.sensitivitasLAL || "-"}</td>
+                                    <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.sensitivitasCSE || "-"}</td>
+                                  </>
+                                )}
+                              </>
+                            )}
+                            <td className={`border border-slate-300 px-1.5 py-1 text-center font-semibold ${ket === "TMS" ? "text-red-600" : ket === "-" ? "text-slate-400" : "text-emerald-600"}`}>{ket}</td>
+                          </tr>
+                        );
+                      })}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -792,7 +843,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
               <p className="mb-1 text-xs font-semibold uppercase text-slate-400">Diperiksa oleh</p>
               <div className="mb-2 flex h-24 items-center justify-center rounded border border-dashed border-slate-300 print:h-28">
                 {analis.nama ? (
-                  <VerifyQR type="reportHasil" system={systemKey} period={tanggal} slot="analis" size={64} />
+                  <VerifyQR type="reportHasil" system={systemKey} period={monthKey} slot="analis" size={64} />
                 ) : (
                   <span className="only-screen text-xs text-slate-300">Ruang tanda tangan</span>
                 )}
@@ -804,7 +855,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
               <p className="mb-1 text-xs font-semibold uppercase text-slate-400">Mengetahui</p>
               <div className="mb-2 flex h-24 items-center justify-center rounded border border-dashed border-slate-300 print:h-28">
                 {diperiksa.nama ? (
-                  <VerifyQR type="reportHasil" system={systemKey} period={tanggal} slot="diperiksa" size={64} />
+                  <VerifyQR type="reportHasil" system={systemKey} period={monthKey} slot="diperiksa" size={64} />
                 ) : (
                   <span className="only-screen text-xs text-slate-300">Ruang tanda tangan</span>
                 )}
@@ -869,7 +920,8 @@ function emptySignoff() {
 // Diisi 1x per minggu (bukan per baris data POU). Defaultnya SATU nomor yang
 // sama otomatis berlaku untuk semua sistem minggu itu; kalau minggu tertentu
 // nomornya beda untuk sistem ini saja, centang "Khusus sistem ini".
-function KontrolMingguanPanel({ systemKey, entries, records, canInput, saving, onSave }) {
+function KontrolMingguanPanel({ systemKey, jenis, entries, records, canInput, saving, onSave }) {
+  const isWFIType = jenis === "WFI" || jenis === "Pure Steam";
   const weeks = useMemo(() => {
     const map = new Map();
     entries.forEach((e) => {
@@ -895,6 +947,12 @@ function KontrolMingguanPanel({ systemKey, entries, records, canInput, saving, o
           noKontrolBakteri: source?.noKontrolBakteri || "",
           kontrolPositif: source?.kontrolPositif || "",
           kontrolNegatif: source?.kontrolNegatif || "",
+          kontrolNegatifLAL: source?.kontrolNegatifLAL || "",
+          kontrolPositifLAL: source?.kontrolPositifLAL || "",
+          noBetLAL: source?.noBetLAL || "",
+          noBetCSE: source?.noBetCSE || "",
+          sensitivitasLAL: source?.sensitivitasLAL || "",
+          sensitivitasCSE: source?.sensitivitasCSE || "",
           overrideThisSystem: !!override,
           hadOverrideInitially: !!override,
         };
@@ -909,28 +967,32 @@ function KontrolMingguanPanel({ systemKey, entries, records, canInput, saving, o
 
   function handleSaveAll() {
     const out = [];
+    const fields = (row) => ({
+      noKontrolMedia: row.noKontrolMedia, noKontrolBakteri: row.noKontrolBakteri,
+      kontrolPositif: row.kontrolPositif, kontrolNegatif: row.kontrolNegatif,
+      kontrolNegatifLAL: row.kontrolNegatifLAL || "", kontrolPositifLAL: row.kontrolPositifLAL || "",
+      noBetLAL: row.noBetLAL || "", noBetCSE: row.noBetCSE || "",
+      sensitivitasLAL: row.sensitivitasLAL || "", sensitivitasCSE: row.sensitivitasCSE || "",
+    });
     weeks.forEach((wk) => {
       const row = rows[wk.key];
       if (!row) return;
       if (row.overrideThisSystem) {
-        out.push({
-          weekKey: wk.key, system: systemKey,
-          noKontrolMedia: row.noKontrolMedia, noKontrolBakteri: row.noKontrolBakteri,
-          kontrolPositif: row.kontrolPositif, kontrolNegatif: row.kontrolNegatif,
-        });
+        out.push({ weekKey: wk.key, system: systemKey, ...fields(row) });
       } else {
         // Bukan override -> nilai berlaku sebagai default (semua sistem).
-        out.push({
-          weekKey: wk.key, system: "",
-          noKontrolMedia: row.noKontrolMedia, noKontrolBakteri: row.noKontrolBakteri,
-          kontrolPositif: row.kontrolPositif, kontrolNegatif: row.kontrolNegatif,
-        });
+        out.push({ weekKey: wk.key, system: "", ...fields(row) });
         // Kalau minggu ini SEBELUMNYA punya override khusus sistem ini,
         // tapi sekarang dilepas centangnya -> kosongkan override lamanya
         // supaya tidak jadi data basi yang tetap dipakai (override menang
         // dari default di findKontrolMingguan_).
         if (row.hadOverrideInitially) {
-          out.push({ weekKey: wk.key, system: systemKey, noKontrolMedia: "", noKontrolBakteri: "", kontrolPositif: "", kontrolNegatif: "" });
+          out.push({
+            weekKey: wk.key, system: systemKey,
+            noKontrolMedia: "", noKontrolBakteri: "", kontrolPositif: "", kontrolNegatif: "",
+            kontrolNegatifLAL: "", kontrolPositifLAL: "", noBetLAL: "", noBetCSE: "",
+            sensitivitasLAL: "", sensitivitasCSE: "",
+          });
         }
       }
     });
@@ -944,7 +1006,7 @@ function KontrolMingguanPanel({ systemKey, entries, records, canInput, saving, o
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h3 className="text-sm font-bold text-slate-700">Kontrol Mingguan</h3>
-          <p className="text-xs text-slate-400">Nomor Kontrol Media/Bakteri &amp; hasil Kontrol Positif/Negatif — diisi 1x per minggu, otomatis berlaku untuk semua sistem kecuali dicentang khusus.</p>
+          <p className="text-xs text-slate-400">Nomor Kontrol Media/Bakteri &amp; hasil Kontrol Positif/Negatif{isWFIType ? " (mikrobiologi & LAL/Endotoksin)" : ""} — diisi 1x per minggu, otomatis berlaku untuk semua sistem kecuali dicentang khusus.</p>
         </div>
         {canInput && (
           <button onClick={handleSaveAll} disabled={saving}
@@ -962,6 +1024,16 @@ function KontrolMingguanPanel({ systemKey, entries, records, canInput, saving, o
               <th className="px-3 py-2">No. Kontrol Bakteri</th>
               <th className="px-3 py-2">Kontrol Positif</th>
               <th className="px-3 py-2">Kontrol Negatif</th>
+              {isWFIType && (
+                <>
+                  <th className="px-3 py-2">Kontrol Negatif (LAL)</th>
+                  <th className="px-3 py-2">Kontrol Positif (LAL)</th>
+                  <th className="px-3 py-2">No Bet LAL</th>
+                  <th className="px-3 py-2">No Bet CSE</th>
+                  <th className="px-3 py-2">Sensitivitas LAL</th>
+                  <th className="px-3 py-2">Sensitivitas CSE</th>
+                </>
+              )}
               <th className="px-3 py-2 text-center">Khusus sistem ini</th>
             </tr>
           </thead>
@@ -995,6 +1067,44 @@ function KontrolMingguanPanel({ systemKey, entries, records, canInput, saving, o
                       {QUALI_OPTIONS.kontrolNegatif.map((o) => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </td>
+                  {isWFIType && (
+                    <>
+                      <td className="px-3 py-2">
+                        <select disabled={!canInput} value={row.kontrolNegatifLAL || ""} onChange={(ev) => updateRow(wk.key, { kontrolNegatifLAL: ev.target.value })}
+                          className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
+                          <option value="">-</option>
+                          {QUALI_OPTIONS.kontrolNegatif.map((o) => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2">
+                        <select disabled={!canInput} value={row.kontrolPositifLAL || ""} onChange={(ev) => updateRow(wk.key, { kontrolPositifLAL: ev.target.value })}
+                          className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
+                          <option value="">-</option>
+                          {QUALI_OPTIONS.kontrolPositif.map((o) => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="text" disabled={!canInput} value={row.noBetLAL || ""} placeholder="-"
+                          onChange={(ev) => updateRow(wk.key, { noBetLAL: ev.target.value })}
+                          className="w-24 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="text" disabled={!canInput} value={row.noBetCSE || ""} placeholder="-"
+                          onChange={(ev) => updateRow(wk.key, { noBetCSE: ev.target.value })}
+                          className="w-24 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="text" disabled={!canInput} value={row.sensitivitasLAL || ""} placeholder="-"
+                          onChange={(ev) => updateRow(wk.key, { sensitivitasLAL: ev.target.value })}
+                          className="w-20 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="text" disabled={!canInput} value={row.sensitivitasCSE || ""} placeholder="-"
+                          onChange={(ev) => updateRow(wk.key, { sensitivitasCSE: ev.target.value })}
+                          className="w-20 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+                      </td>
+                    </>
+                  )}
                   <td className="px-3 py-2 text-center">
                     <input type="checkbox" disabled={!canInput} checked={!!row.overrideThisSystem}
                       onChange={(ev) => updateRow(wk.key, { overrideThisSystem: ev.target.checked })} />
@@ -1226,7 +1336,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
   if (mode === "reportHasil") {
     return (
       <ReportHasilPanel systemKey={systemKey} entriesForMonth={entries} monthKey={monthKey}
-        session={session} token={token} onBack={() => setMode("pengkajian")} kontrolRecords={kontrolRecords} />
+        session={session} token={token} onBack={() => setMode("pengkajian")} kontrolRecords={kontrolRecords} masterPoints={masterPoints} />
     );
   }
 
@@ -1287,7 +1397,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       </div>
 
       {kontrolError && <p className="no-print mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{kontrolError}</p>}
-      <KontrolMingguanPanel systemKey={systemKey} entries={entries} records={kontrolRecords}
+      <KontrolMingguanPanel systemKey={systemKey} jenis={system.jenis} entries={entries} records={kontrolRecords}
         canInput={canInputQC} saving={kontrolSaving} onSave={handleSaveKontrolMingguan} />
 
       <div className="mb-5 rounded-xl border border-slate-200 bg-white p-5 print-card">
@@ -1303,7 +1413,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
             <tbody>
               {params.map((p) => {
                 const meta = PARAM_META[p];
-                const limit = LIMITS[p];
+                const limit = getLimit(p, system.jenis);
                 if (limit.qualitative) {
                   return (
                     <tr key={p} className="border-b border-slate-100 last:border-0">
@@ -1364,7 +1474,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       <div className="mb-5 space-y-4">
         {params.map((p) => (
           <div key={p} className="overflow-hidden rounded-xl border border-slate-200 bg-white print-card">
-            {!LIMITS[p].qualitative && <div className="p-4"><ParamChart entries={entries} paramKey={p} systemLabel={system.label} /></div>}
+            {!getLimit(p, system.jenis).qualitative && <div className="p-4"><ParamChart entries={entries} paramKey={p} systemLabel={system.label} jenis={system.jenis} /></div>}
             <div className="border-t border-slate-100 p-4 avoid-break">
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Hasil &amp; Tren {PARAM_META[p].short}
@@ -1673,7 +1783,7 @@ function VerifyPage() {
   const type = params.get("type"); // "reportHasil" | "pengkajian"
   const systemKey = params.get("system");
   const slot = params.get("slot");
-  const period = type === "reportHasil" ? params.get("tanggal") : params.get("month");
+  const period = params.get("month");
   const system = SYSTEMS.find((s) => s.key === systemKey);
 
   const [loading, setLoading] = useState(true);
@@ -1708,7 +1818,7 @@ function VerifyPage() {
   if (data && !data.error) {
     if (type === "reportHasil") {
       docLabel = "Report Hasil Pemeriksaan " + system.jenis;
-      periodLabel = "Tanggal Pemeriksaan: " + fullDateID(period);
+      periodLabel = "Periode: " + monthLabel(period);
       signer = slot === "analis"
         ? { nama: data.analis?.nama, label: "Diperiksa oleh", tanggal: data.analis?.tanggal }
         : { nama: data.diperiksa?.nama, label: "Mengetahui (QC)", tanggal: data.diperiksa?.tanggal };

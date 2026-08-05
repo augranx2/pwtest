@@ -39,6 +39,24 @@ const LIMITS = {
   kontrolNegatif: { qualitative: true, passValue: "Negatif" },
 };
 
+// Beberapa parameter punya persyaratan yang BEDA tergantung jenis air —
+// mikrobiologi WFI/Pure Steam jauh lebih ketat (≤10 CFU/100ml, sesuai
+// Formulir Pemeriksaan WFI FM.QC.063) dibanding PW (≤100 CFU/mL). Kalau
+// jenis air + paramKey ada di sini, override ini dipakai; kalau tidak, pakai
+// LIMITS di atas (default/umum untuk PW).
+const LIMITS_OVERRIDE_BY_JENIS = {
+  WFI: {
+    mikrobiologi: { syaratMax: 10, alertMax: 6.5, actionMax: 8.9 },
+  },
+  "Pure Steam": {
+    mikrobiologi: { syaratMax: 10, alertMax: 6.5, actionMax: 8.9 },
+  },
+};
+
+function getLimit(paramKey, jenis) {
+  return (jenis && LIMITS_OVERRIDE_BY_JENIS[jenis] && LIMITS_OVERRIDE_BY_JENIS[jenis][paramKey]) || LIMITS[paramKey];
+}
+
 // Pilihan dropdown untuk setiap parameter kualitatif (dipakai saat entri data
 // di App.jsx) — opsi pertama = hasil yang sesuai persyaratan (passValue).
 const QUALI_OPTIONS = {
@@ -136,8 +154,8 @@ function fullDateID(iso) {
 
 // level: 1=Terkendali, 2=Alert, 3=Action, 4=Melebihi Syarat(penyimpangan)
 // arah: "atas" | "bawah" | null (dipakai untuk parameter dua-arah seperti pH)
-function statusFor(rawValue, paramKey) {
-  const limit = LIMITS[paramKey];
+function statusFor(rawValue, paramKey, jenis) {
+  const limit = getLimit(paramKey, jenis);
   if (!limit) return { level: 0 };
   if (rawValue === null || rawValue === undefined || rawValue === "") return { level: 0 };
 
@@ -173,7 +191,7 @@ function collectPoints(entries, paramKey) {
 
 function paramNarrative(paramKey, entries, jenisLabel) {
   const meta = PARAM_META[paramKey];
-  const limit = LIMITS[paramKey];
+  const limit = getLimit(paramKey, jenisLabel);
   const points = collectPoints(entries, paramKey);
 
   if (points.length === 0) {
@@ -204,7 +222,7 @@ function paramNarrative(paramKey, entries, jenisLabel) {
     ? `${fmtNum(limit.syaratMin)}–${fmtNum(limit.syaratMax)}`
     : `≤ ${fmtNum(limit.syaratMax)}`;
 
-  const withStatus = numeric.map((p) => ({ ...p, status: statusFor(p.raw, paramKey) }));
+  const withStatus = numeric.map((p) => ({ ...p, status: statusFor(p.raw, paramKey, jenisLabel) }));
   const outOfSpec = withStatus.filter((p) => p.status.level >= 4);
   const actionPts = withStatus.filter((p) => p.status.level === 3);
   const alertPts = withStatus.filter((p) => p.status.level === 2);
@@ -257,7 +275,7 @@ function kesimpulanText(systemLabel, jenisAir, monthLabel, entries, params) {
   params.forEach((paramKey) => {
     const points = collectPoints(entries, paramKey);
     points.forEach((p) => {
-      const st = statusFor(p.raw, paramKey);
+      const st = statusFor(p.raw, paramKey, jenisAir);
       if (st.level >= 4) anyOutOfSpec = true;
       else if (st.level >= 2) anyAlertOrAction = true;
     });
@@ -292,8 +310,8 @@ export function generateLocalNarrative({ systemLabel, jenisAir, monthLabel, entr
   let reviewTren = "";
   if (prevEntries && prevEntries.length > 0) {
     const lines = params.map((paramKey) => {
-      const curPoints = collectPoints(entries, paramKey).map((p) => statusFor(p.raw, paramKey).level);
-      const prevPoints = collectPoints(prevEntries, paramKey).map((p) => statusFor(p.raw, paramKey).level);
+      const curPoints = collectPoints(entries, paramKey).map((p) => statusFor(p.raw, paramKey, jenisAir).level);
+      const prevPoints = collectPoints(prevEntries, paramKey).map((p) => statusFor(p.raw, paramKey, jenisAir).level);
       const curNoted = curPoints.filter((l) => l >= 2).length;
       const prevNoted = prevPoints.filter((l) => l >= 2).length;
       const meta = PARAM_META[paramKey];
@@ -311,7 +329,7 @@ export function generateLocalNarrative({ systemLabel, jenisAir, monthLabel, entr
     // sendiri, dan jelaskan kenapa perbandingan tren belum bisa dilakukan,
     // alih-alih membiarkan bagian ini kosong.
     const noted = params.flatMap((paramKey) =>
-      collectPoints(entries, paramKey).filter((p) => statusFor(p.raw, paramKey).level >= 2).map(() => paramKey)
+      collectPoints(entries, paramKey).filter((p) => statusFor(p.raw, paramKey, jenisAir).level >= 2).map(() => paramKey)
     );
     const ringkasan = noted.length === 0
       ? `seluruh parameter (${params.map((p) => PARAM_META[p].label).join(", ")}) berada dalam kondisi terkendali tanpa hasil yang mencapai Alert maupun Action Limit`
@@ -324,4 +342,4 @@ export function generateLocalNarrative({ systemLabel, jenisAir, monthLabel, entr
   return { pendahuluan, perParameter, reviewTren, kesimpulan };
 }
 
-export { PARAM_META, PARAMS_BY_JENIS, LIMITS, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel };
+export { PARAM_META, PARAMS_BY_JENIS, LIMITS, getLimit, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel };

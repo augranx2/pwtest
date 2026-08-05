@@ -131,6 +131,18 @@ const LIMITS = {
   kontrolNegatif: { qualitative: true, passValue: "Negatif" },
 };
 
+// Mikrobiologi WFI/Pure Steam jauh lebih ketat (≤10 CFU/100ml, sesuai
+// Formulir Pemeriksaan WFI FM.QC.063) dibanding PW (≤100 CFU/mL) — HARUS
+// SAMA dengan LIMITS_OVERRIDE_BY_JENIS di narrativeGenerator.js (frontend).
+const LIMITS_OVERRIDE_BY_JENIS = {
+  WFI: { mikrobiologi: { syaratMax: 10, alertMax: 6.5, actionMax: 8.9 } },
+  "Pure Steam": { mikrobiologi: { syaratMax: 10, alertMax: 6.5, actionMax: 8.9 } },
+};
+
+function getLimit_(paramKey, jenis) {
+  return (jenis && LIMITS_OVERRIDE_BY_JENIS[jenis] && LIMITS_OVERRIDE_BY_JENIS[jenis][paramKey]) || LIMITS[paramKey];
+}
+
 // ---------------------------------------------------------------------------
 // KONFIGURASI: AUTH / ROLE / AUDIT  (identik dengan EM Viable)
 // ---------------------------------------------------------------------------
@@ -171,7 +183,7 @@ function doGet(e) {
         result = getActivityLog_(e.parameter.token, e.parameter.month, e.parameter.system);
         break;
       case "reportHasil":
-        result = getReportHasil_(e.parameter.system, e.parameter.tanggal);
+        result = getReportHasil_(e.parameter.system, e.parameter.month);
         break;
       case "kontrolMingguan":
         result = getKontrolMingguan_();
@@ -223,12 +235,12 @@ function doPost(e) {
         break;
       case "saveReportHasil":
         result = withAuth_(body.token, function (session) {
-          return saveReportHasilAuthed_(session, body.system, body.tanggal);
+          return saveReportHasilAuthed_(session, body.system, body.month);
         });
         break;
       case "approveReportHasil":
         result = withAuth_(body.token, function (session) {
-          return approveReportHasilAuthed_(session, body.system, body.tanggal);
+          return approveReportHasilAuthed_(session, body.system, body.month);
         });
         break;
       case "saveKontrolMingguan":
@@ -781,8 +793,11 @@ function approveMengetahuiAuthed_(session, systemKey, month) {
 // REPORT HASIL PEMERIKSAAN (formulir QC fisik yang didigitalkan) — tab
 // "Report_Hasil". Cuma menyimpan metadata tanda tangan; datanya sendiri
 // diambil live dari tab "Entries" (sama seperti Report Hasil EM di EM Viable).
-// Kolom: A System | B Tanggal | C AnalisNama | D AnalisUsername |
-// E AnalisTanggal | F DiperiksaNama | G DiperiksaUsername | H DiperiksaTanggal | I UpdatedAt
+// 1 formulir = 1 BULAN PENUH (semua minggu & titik sampling dalam 1 halaman,
+// sesuai form fisik FM.QC.063 dkk), jadi di-key per (System, Bulan) — BUKAN
+// per tanggal lagi. Kolom: A System | B Bulan (yyyy-MM) | C AnalisNama |
+// D AnalisUsername | E AnalisTanggal | F DiperiksaNama | G DiperiksaUsername |
+// H DiperiksaTanggal | I UpdatedAt
 // ---------------------------------------------------------------------------
 function getReportHasilSheet_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(REPORT_HASIL_SHEET);
@@ -790,24 +805,24 @@ function getReportHasilSheet_() {
   return sheet;
 }
 
-function findReportHasilRow_(systemKey, tanggal) {
+function findReportHasilRow_(systemKey, month) {
   const sheet = getReportHasilSheet_();
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return { sheet: sheet, rowIndex: -1, row: null };
   const values = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
   for (let i = 0; i < values.length; i++) {
-    if (String(values[i][0] || "").trim() === systemKey && formatDate_(values[i][1]) === tanggal) {
+    if (String(values[i][0] || "").trim() === systemKey && String(values[i][1] || "").trim() === month) {
       return { sheet: sheet, rowIndex: i + 2, row: values[i] };
     }
   }
   return { sheet: sheet, rowIndex: -1, row: null };
 }
 
-function getReportHasil_(systemKey, tanggal) {
+function getReportHasil_(systemKey, month) {
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
-  if (!tanggal) return { found: false };
-  const found = findReportHasilRow_(systemKey, tanggal);
+  if (!month) return { found: false };
+  const found = findReportHasilRow_(systemKey, month);
   if (found.rowIndex === -1) return { found: false };
   const row = found.row;
   return {
@@ -818,15 +833,15 @@ function getReportHasil_(systemKey, tanggal) {
   };
 }
 
-function saveReportHasilAuthed_(session, systemKey, tanggal) {
+function saveReportHasilAuthed_(session, systemKey, month) {
   if (!requireRole_(session, "Staff", "QC")) {
     return { error: "Hanya Staff/Supervisor/Manager QC yang boleh mengisi Report Hasil Pemeriksaan." };
   }
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
-  if (!tanggal) return { error: "Tanggal pemeriksaan wajib diisi." };
+  if (!month) return { error: "Periode (bulan) wajib diisi." };
 
-  const found = findReportHasilRow_(systemKey, tanggal);
+  const found = findReportHasilRow_(systemKey, month);
   const now = new Date();
   const isNew = found.rowIndex === -1;
   const analisNama = isNew ? session.nama : (found.row[2] || session.nama);
@@ -837,7 +852,7 @@ function saveReportHasilAuthed_(session, systemKey, tanggal) {
   const diperiksaTanggal = isNew ? "" : (found.row[7] || "");
 
   const rowValues = [
-    systemKey, tanggal,
+    systemKey, month,
     analisNama, analisUsername, analisTanggal,
     diperiksaNama, diperiksaUsername, diperiksaTanggal,
     now,
@@ -851,25 +866,25 @@ function saveReportHasilAuthed_(session, systemKey, tanggal) {
   writeAuditLog_({
     username: session.username, nama: session.nama, role: session.role, departemen: session.departemen,
     aksi: isNew ? "Buat Report Hasil Pemeriksaan" : "Update Report Hasil Pemeriksaan",
-    sistem: cfg.label, bulan: tanggal, detail: "",
+    sistem: cfg.label, bulan: month, detail: "",
   });
 
-  return getReportHasil_(systemKey, tanggal);
+  return getReportHasil_(systemKey, month);
 }
 
-function approveReportHasilAuthed_(session, systemKey, tanggal) {
+function approveReportHasilAuthed_(session, systemKey, month) {
   if (!requireRole_(session, "Supervisor", "QC")) {
     return { error: "Hanya Supervisor/Manager QC yang boleh menyetujui Report Hasil Pemeriksaan." };
   }
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
-  const found = findReportHasilRow_(systemKey, tanggal);
-  if (found.rowIndex === -1) return { error: "Belum ada draf Report Hasil Pemeriksaan untuk tanggal ini." };
+  const found = findReportHasilRow_(systemKey, month);
+  if (found.rowIndex === -1) return { error: "Belum ada draf Report Hasil Pemeriksaan untuk periode ini." };
 
   const row = found.row;
   const now = new Date();
   const rowValues = [
-    systemKey, tanggal,
+    systemKey, month,
     row[2] || "", row[3] || "", row[4] || "",
     session.nama, session.username, formatDate_(now),
     now,
@@ -878,16 +893,21 @@ function approveReportHasilAuthed_(session, systemKey, tanggal) {
 
   writeAuditLog_({
     username: session.username, nama: session.nama, role: session.role, departemen: session.departemen,
-    aksi: "Approve Report Hasil Pemeriksaan", sistem: cfg.label, bulan: tanggal, detail: "",
+    aksi: "Approve Report Hasil Pemeriksaan", sistem: cfg.label, bulan: month, detail: "",
   });
 
-  return getReportHasil_(systemKey, tanggal);
+  return getReportHasil_(systemKey, month);
 }
 
 // ---------------------------------------------------------------------------
-// KONTROL MINGGUAN (tab "Kontrol_Mingguan") — Nomor Kontrol Media/Bakteri &
-// hasil Kontrol Positif/Negatif, diisi 1x per minggu, berlaku untuk semua
-// sistem kecuali diberi pengecualian/override khusus sistem tertentu.
+// KONTROL MINGGUAN (tab "Kontrol_Mingguan") — diisi 1x per minggu, berlaku
+// untuk semua sistem kecuali diberi pengecualian/override khusus sistem
+// tertentu. Kolom: A WeekKey | B System | C NoKontrolMedia | D NoKontrolBakteri
+// | E KontrolPositif | F KontrolNegatif | G KontrolNegatifLAL | H KontrolPositifLAL
+// | I NoBetLAL | J NoBetCSE | K SensitivitasLAL | L SensitivitasCSE | M UpdatedBy | N UpdatedAt
+// (Kolom G-L cuma relevan/dipakai untuk sistem WFI & Pure Steam — kontrol
+// khusus uji Endotoksin/LAL, terpisah dari kontrol media/bakteri mikrobiologi
+// di kolom C-F yang berlaku untuk SEMUA sistem termasuk PW.)
 // ---------------------------------------------------------------------------
 
 // Senin dari minggu yang memuat tanggal (y, m0=bulan 0-indeks, d).
@@ -942,8 +962,14 @@ function getKontrolMingguan_() {
       noKontrolBakteri: row[3] || "",
       kontrolPositif: row[4] || "",
       kontrolNegatif: row[5] || "",
-      updatedBy: row[6] || "",
-      updatedAt: formatDate_(row[7]) || row[7] || "",
+      kontrolNegatifLAL: row[6] || "",
+      kontrolPositifLAL: row[7] || "",
+      noBetLAL: row[8] || "",
+      noBetCSE: row[9] || "",
+      sensitivitasLAL: row[10] || "",
+      sensitivitasCSE: row[11] || "",
+      updatedBy: row[12] || "",
+      updatedAt: formatDate_(row[13]) || row[13] || "",
     });
   }
   return { records: records };
@@ -990,10 +1016,13 @@ function saveKontrolMingguanAuthed_(session, records) {
       weekKey, system,
       rec.noKontrolMedia || "", rec.noKontrolBakteri || "",
       rec.kontrolPositif || "", rec.kontrolNegatif || "",
+      rec.kontrolNegatifLAL || "", rec.kontrolPositifLAL || "",
+      rec.noBetLAL || "", rec.noBetCSE || "",
+      rec.sensitivitasLAL || "", rec.sensitivitasCSE || "",
       session.nama || session.username || "", now,
     ];
     if (foundRow > 0) {
-      sheet.getRange(foundRow, 1, 1, 8).setValues([rowData]);
+      sheet.getRange(foundRow, 1, 1, 14).setValues([rowData]);
       values[foundRow - 1] = rowData;
     } else {
       sheet.appendRow(rowData);
@@ -1025,8 +1054,8 @@ function parseNumericValue_(rawValue) {
 }
 
 // level: 0=N/A/belum diuji, 1=Terkendali, 2=Alert, 3=Action, 4=Melebihi Syarat
-function levelFor_(rawValue, parameter) {
-  const limit = LIMITS[parameter];
+function levelFor_(rawValue, parameter, jenis) {
+  const limit = getLimit_(parameter, jenis);
   if (!limit) return 0;
   if (rawValue === null || rawValue === undefined || rawValue === "") return 0;
 
@@ -1063,7 +1092,7 @@ function getStatusIndex_(month) {
     const weekKeysThisMonth = {};
     entries.forEach(function (e) {
       params.forEach(function (p) {
-        const lvl = levelFor_(e[p], p);
+        const lvl = levelFor_(e[p], p, cfg.jenis);
         if (lvl > maxLevel) maxLevel = lvl;
       });
       const wk = weekKeyForISO_(e.tanggal);
@@ -1078,6 +1107,12 @@ function getStatusIndex_(month) {
       const lvlNeg = levelFor_(rec.kontrolNegatif, "kontrolNegatif");
       if (lvlPos > maxLevel) maxLevel = lvlPos;
       if (lvlNeg > maxLevel) maxLevel = lvlNeg;
+      if (cfg.jenis === "WFI" || cfg.jenis === "Pure Steam") {
+        const lvlPosLAL = levelFor_(rec.kontrolPositifLAL, "kontrolPositif");
+        const lvlNegLAL = levelFor_(rec.kontrolNegatifLAL, "kontrolNegatif");
+        if (lvlPosLAL > maxLevel) maxLevel = lvlPosLAL;
+        if (lvlNegLAL > maxLevel) maxLevel = lvlNegLAL;
+      }
     });
     out[key] = { level: maxLevel, hasData: entries.length > 0 };
   });
