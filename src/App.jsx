@@ -30,6 +30,16 @@ const SYSTEMS = [
   { key: "ps_sefalosporin_steril", jenis: "Pure Steam", label: "Pure Steam — Sefalosporin Steril" },
 ];
 
+// Penomoran dokumen Formulir QC — beda-beda per sistem/fasilitas (ditampilkan
+// di pojok kanan atas Formulir Pemeriksaan, seperti formulir EM Viable).
+const DOC_NUMBERS = {
+  pw_nbl: { no: "FM.QC.355/R4", tglBerlaku: "01/02/2024", menggantikanNo: "FM.QC.355/R3", tglBerlakuLama: "05/10/2022" },
+  pw_betalaktam: { no: "FM.QC.040/R6", tglBerlaku: "05/10/2022", menggantikanNo: "FM.QC.040/R5", tglBerlakuLama: "01/10/2019" },
+  pw_sefalosporin: { no: "FM.QC.039/R7", tglBerlaku: "01/02/2024", menggantikanNo: "FM.QC.039/R6", tglBerlakuLama: "05/10/2022" },
+  wfi_sefalosporin: { no: "FM.QC.063/R2", tglBerlaku: "05/10/2022", menggantikanNo: "FM.QC.063/R1", tglBerlakuLama: "18/05/2020" },
+  ps_sefalosporin_steril: { no: "FM.QC.713/R0", tglBerlaku: "21/09/2022", menggantikanNo: "-", tglBerlakuLama: "-" },
+};
+
 function uid() {
   return "id-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
@@ -663,6 +673,7 @@ function Dashboard({ monthKey, setMonthKey, statusIndex, loadingStatus, statusEr
 /* ========================================================================= REPORT HASIL PEMERIKSAAN (formulir QC fisik yang didigitalkan) */
 function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token, onBack, kontrolRecords = [], masterPoints = [] }) {
   const system = SYSTEMS.find((s) => s.key === systemKey);
+  const docNo = DOC_NUMBERS[systemKey];
   const isWFIType = system.jenis === "WFI" || system.jenis === "Pure Steam";
   // Kolom mutu air dasar (di luar Endotoksin — Endotoksin ditempatkan manual
   // setelah blok Kontrol Mikrobiologi/Tanggal Baca, sesuai urutan form fisik).
@@ -762,10 +773,10 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
   // table-layout:fixed tidak membuat semua kolom sama lebar rata — Titik
   // Sampling & kolom kontrol butuh sedikit lebih lega dari kolom parameter biasa.
   const colWeights = [
-    1.6, 1, // Titik Sampling, Tanggal
+    1.6, 1.3, // Titik Sampling, Tanggal
     ...baseParams.map(() => 1),
     1.1, 1, 1.1, 1, // No Kontrol Media, Kontrol Negatif, No Kontrol Bakteri, Kontrol Positif
-    1, // Tanggal Baca
+    1.3, // Tanggal Baca
     ...(isWFIType ? [1, 1, 1, 1, 1, 1, 1] : []), // Endotoksin, Kontrol Negatif/Positif LAL, No Bet LAL/CSE, Sensitivitas LAL/CSE
     1, // Kesimpulan
   ];
@@ -811,6 +822,14 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
                 <h2 className="text-lg font-bold uppercase text-slate-800">Formulir Pemeriksaan {system.jenis}</h2>
               </div>
             </div>
+            {docNo && (
+              <div className="shrink-0 text-right text-[11px] leading-tight text-slate-500">
+                <p><span className="text-slate-400">No. </span><span className="font-medium text-slate-700">: {docNo.no}</span></p>
+                <p><span className="text-slate-400">Tgl Berlaku </span><span className="font-medium text-slate-700">: {docNo.tglBerlaku}</span></p>
+                <p><span className="text-slate-400">Menggantikan No. </span><span className="font-medium text-slate-700">: {docNo.menggantikanNo}</span></p>
+                <p><span className="text-slate-400">Tgl Berlaku </span><span className="font-medium text-slate-700">: {docNo.tglBerlakuLama}</span></p>
+              </div>
+            )}
           </div>
 
           <div className="mb-4 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
@@ -874,7 +893,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
                         return (
                           <tr key={e.id}>
                             <td className="border border-slate-300 px-1.5 py-1 font-medium">{e.titikSampling}</td>
-                            <td className="border border-slate-300 px-1.5 py-1">{shortDate(e.tanggal)}</td>
+                            <td className="border border-slate-300 px-1.5 py-1">{isoToID(e.tanggal)}</td>
                             {baseParams.map((p) => <td key={p} className="border border-slate-300 px-1.5 py-1 text-center">{displayValue(e[p])}</td>)}
                             {idx === 0 && (
                               <>
@@ -884,7 +903,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
                                 <td rowSpan={grp.rows.length} className="border border-slate-300 px-1.5 py-1 text-center align-middle">{rec.kontrolPositif || "-"}</td>
                               </>
                             )}
-                            <td className="border border-slate-300 px-1.5 py-1 text-center">{shortDate(addDaysISO(e.tanggal, 3))}</td>
+                            <td className="border border-slate-300 px-1.5 py-1 text-center">{isoToID(addDaysISO(e.tanggal, 3))}</td>
                             {isWFIType && (
                               <>
                                 <td className="border border-slate-300 px-1.5 py-1 text-center">{displayValue(e.endotoksin)}</td>
@@ -1494,6 +1513,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
                 </p>
               </div>
             </div>
+            <p className="shrink-0 text-xs font-medium text-blue-100 sm:text-right">No. Formulir: <span className="text-white">QA.FM.156</span></p>
           </div>
         </div>
         <div className="flex items-center justify-between bg-white px-5 py-3">
