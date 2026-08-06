@@ -977,16 +977,28 @@ function getKontrolMingguan_() {
 
 // Cari record yang berlaku untuk (weekKey, systemKey): override sistem itu
 // kalau ada, kalau tidak pakai nilai default (system kosong) minggu itu.
-function findKontrolMingguan_(records, weekKey, systemKey) {
-  let override = null;
-  let def = null;
-  for (let i = 0; i < records.length; i++) {
-    const r = records[i];
-    if (r.weekKey !== weekKey) continue;
-    if (r.system === systemKey) override = r;
-    else if (r.system === "") def = r;
-  }
-  return override || def || null;
+const KONTROL_MINGGUAN_FIELDS = [
+  "noKontrolMedia", "noKontrolBakteri", "kontrolPositif", "kontrolNegatif",
+  "kontrolNegatifLAL", "kontrolPositifLAL", "noBetLAL", "noBetCSE", "sensitivitasLAL", "sensitivitasCSE",
+];
+
+function isBlankKontrolRecord_(rec) {
+  if (!rec) return true;
+  return KONTROL_MINGGUAN_FIELDS.every(function (f) { return !rec[f]; });
+}
+
+// Urutan pencarian: pengecualian-minggu+sistem-ini > pengecualian-minggu
+// (semua sistem) > default-bulan (weekKey = "yyyy-MM" saja, system kosong,
+// diisi 1x dan otomatis berlaku ke semua minggu & sistem di bulan itu).
+// Record yang seluruh isiannya kosong dianggap "tidak ada" (dilewati).
+function findKontrolMingguan_(records, weekKey, systemKey, monthKey) {
+  const weekSystem = records.find(function (r) { return r.weekKey === weekKey && r.system === systemKey; });
+  if (weekSystem && !isBlankKontrolRecord_(weekSystem)) return weekSystem;
+  const weekDefault = records.find(function (r) { return r.weekKey === weekKey && r.system === ""; });
+  if (weekDefault && !isBlankKontrolRecord_(weekDefault)) return weekDefault;
+  const monthDefault = records.find(function (r) { return r.weekKey === monthKey && r.system === ""; });
+  if (monthDefault && !isBlankKontrolRecord_(monthDefault)) return monthDefault;
+  return null;
 }
 
 function saveKontrolMingguanAuthed_(session, records) {
@@ -1101,7 +1113,7 @@ function getStatusIndex_(month) {
     // Deviasi Kontrol Mingguan (Kontrol Positif harus Positif, Kontrol
     // Negatif harus Negatif) untuk minggu-minggu yang datanya ada di bulan ini.
     Object.keys(weekKeysThisMonth).forEach(function (wk) {
-      const rec = findKontrolMingguan_(kontrolRecords, wk, key);
+      const rec = findKontrolMingguan_(kontrolRecords, wk, key, month);
       if (!rec) return;
       const lvlPos = levelFor_(rec.kontrolPositif, "kontrolPositif");
       const lvlNeg = levelFor_(rec.kontrolNegatif, "kontrolNegatif");

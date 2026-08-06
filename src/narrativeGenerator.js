@@ -114,6 +114,36 @@ function weekLabel(wk) {
   return `Minggu ${wk.weekNum} — ${MONTH_NAMES_ID[wk.month - 1]} ${wk.year}`;
 }
 
+// --- KONTROL MINGGUAN: cari record yang berlaku -----------------------------
+// Nilai default cukup diisi 1x (weekKey = bulan saja, format "yyyy-MM",
+// system kosong) dan otomatis berlaku untuk SEMUA minggu & sistem di bulan
+// itu. Kalau ada minggu tertentu yang mau dibedakan, itu disimpan sebagai
+// "pengecualian" dengan weekKey minggu penuh ("yyyy-MM-Wn") — bisa berlaku
+// untuk semua sistem (system kosong) atau cuma satu sistem (system diisi).
+// Urutan pencarian: pengecualian-minggu+sistem-ini > pengecualian-minggu
+// (semua sistem) > default-bulan. Record yang seluruh isiannya kosong
+// dianggap "tidak ada" (dilewati) — ini yang dipakai untuk "menghapus"
+// sebuah pengecualian tanpa perlu benar-benar hapus baris di sheet.
+const KONTROL_MINGGUAN_FIELDS = [
+  "noKontrolMedia", "noKontrolBakteri", "kontrolPositif", "kontrolNegatif",
+  "kontrolNegatifLAL", "kontrolPositifLAL", "noBetLAL", "noBetCSE", "sensitivitasLAL", "sensitivitasCSE",
+];
+
+function isBlankKontrolRecord(rec) {
+  if (!rec) return true;
+  return KONTROL_MINGGUAN_FIELDS.every((f) => !rec[f]);
+}
+
+function findKontrolMingguan(records, weekKey, systemKey, monthKey) {
+  const weekSystem = records.find((r) => r.weekKey === weekKey && r.system === systemKey);
+  if (weekSystem && !isBlankKontrolRecord(weekSystem)) return weekSystem;
+  const weekDefault = records.find((r) => r.weekKey === weekKey && r.system === "");
+  if (weekDefault && !isBlankKontrolRecord(weekDefault)) return weekDefault;
+  const monthDefault = records.find((r) => r.weekKey === monthKey && r.system === "");
+  if (monthDefault && !isBlankKontrolRecord(monthDefault)) return monthDefault;
+  return null;
+}
+
 function parseNumericValue(rawValue) {
   if (rawValue === null || rawValue === undefined || rawValue === "") return null;
   const str = String(rawValue).trim();
@@ -342,4 +372,4 @@ export function generateLocalNarrative({ systemLabel, jenisAir, monthLabel, entr
   return { pendahuluan, perParameter, reviewTren, kesimpulan };
 }
 
-export { PARAM_META, PARAMS_BY_JENIS, LIMITS, getLimit, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel };
+export { PARAM_META, PARAMS_BY_JENIS, LIMITS, getLimit, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel, findKontrolMingguan, KONTROL_MINGGUAN_FIELDS };

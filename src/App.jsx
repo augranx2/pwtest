@@ -17,7 +17,7 @@ import {
   changePassword as apiChangePassword,
   fetchKontrolMingguan, saveKontrolMingguan as apiSaveKontrolMingguan,
 } from "./api.js";
-import { generateLocalNarrative, PARAM_META, PARAMS_BY_JENIS, LIMITS, getLimit, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel } from "./narrativeGenerator.js";
+import { generateLocalNarrative, PARAM_META, PARAMS_BY_JENIS, LIMITS, getLimit, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel, findKontrolMingguan } from "./narrativeGenerator.js";
 import { useAuth, hasAccess } from "./auth.js";
 
 // Sistem air TETAP (harus persis sinkron dengan SYSTEMS di Code.gs)
@@ -72,8 +72,19 @@ function prevMonthKey(monthKey) {
 function displayValue(raw) {
   if (raw === null || raw === undefined || raw === "") return "-";
   const str = String(raw).trim();
-  if (/^<\s*[\d.]+$/.test(str)) return str.replace(/\s+/g, "");
-  return str;
+  if (/^<\s*[\d.,]+$/.test(str)) return str.replace(/\s+/g, "").replace(".", ",");
+  // Tampilkan konsisten pakai koma sebagai pemisah desimal (data lama yang
+  // sempat disimpan pakai titik pun ikut tampil rapi dengan koma di sini).
+  return str.replace(/\./g, ",");
+}
+
+// Sebagian orang mengetik pemisah desimal pakai titik (.), sebagian pakai
+// koma (,) — supaya data yang tersimpan konsisten (dan tidak salah baca saat
+// direkap/dibandingkan), titik otomatis diubah jadi koma saat disimpan.
+// Notasi "<1" / "<0.5" dst tetap didukung.
+function normalizeNumericInput(str) {
+  if (str === "" || str === "-") return str;
+  return str.replace(/\./g, ",");
 }
 
 /* ========================================================================= QR VERIFIKASI TANDA TANGAN */
@@ -411,7 +422,7 @@ function EntryRow({ entry, masterPoints, params, readOnly, canDelete, onChange, 
               <input type="text" disabled={readOnly} className="w-20 rounded border border-slate-200 px-2 py-1 text-center text-sm disabled:bg-slate-50"
                 placeholder="-" value={entry[p] === null || entry[p] === undefined ? "" : entry[p]}
                 onChange={(ev) => {
-                  const raw = ev.target.value.trim();
+                  const raw = normalizeNumericInput(ev.target.value.trim());
                   onChange({ ...entry, [p]: raw === "-" ? null : raw });
                 }} />
             )}
@@ -712,8 +723,34 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
   // Endotoksin + 6 kolom LAL/CSE) + Kesimpulan.
   const colCount = 2 + baseParams.length + 4 + 1 + (isWFIType ? 7 : 0) + 1;
 
+  // Lebar kolom proporsional (dipakai lewat <colgroup>) supaya saat print
+  // table-layout:fixed tidak membuat semua kolom sama lebar rata — Titik
+  // Sampling & kolom kontrol butuh sedikit lebih lega dari kolom parameter biasa.
+  const colWeights = [
+    1.6, 1, // Titik Sampling, Tanggal
+    ...baseParams.map(() => 1),
+    1.1, 1, 1.1, 1, // No Kontrol Media, Kontrol Negatif, No Kontrol Bakteri, Kontrol Positif
+    1, // Tanggal Baca
+    ...(isWFIType ? [1, 1, 1, 1, 1, 1, 1] : []), // Endotoksin, Kontrol Negatif/Positif LAL, No Bet LAL/CSE, Sensitivitas LAL/CSE
+    1, // Kesimpulan
+  ];
+  const totalWeight = colWeights.reduce((s, w) => s + w, 0);
+
   return (
     <div className="mx-auto max-w-6xl p-6 print:max-w-none print:p-0">
+      <style>{`
+        @media print {
+          @page { size: A4 landscape; margin: 1cm; }
+        }
+        .qc-form-table-wrap { overflow-x: auto; }
+        @media print {
+          .qc-form-table-wrap { overflow: visible !important; width: auto !important; }
+          .qc-form-table { width: 100% !important; font-size: 7.2px !important; table-layout: fixed; }
+          .qc-form-table th, .qc-form-table td { padding: 1.5px 2px !important; overflow-wrap: break-word; }
+          .qc-form-table thead { display: table-header-group; }
+          .qc-form-table tr { page-break-inside: avoid; break-inside: avoid; }
+        }
+      `}</style>
       <div className="no-print mb-4 flex items-center justify-between">
         <button onClick={onBack} className="inline-flex items-center gap-1 text-sm font-medium text-slate-500 hover:text-slate-700">
           <ChevronLeft size={16} /> Kembali ke Pengkajian SPA
@@ -746,8 +783,11 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
             <p><span className="text-slate-500">Periode</span> : <span className="font-medium">{monthLabel(monthKey)}</span></p>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-[10.5px] leading-tight">
+          <div className="qc-form-table-wrap">
+            <table className="qc-form-table w-full border-collapse text-[10.5px] leading-tight">
+              <colgroup>
+                {colWeights.map((w, i) => <col key={i} style={{ width: `${(w / totalWeight * 100).toFixed(3)}%` }} />)}
+              </colgroup>
               <thead>
                 <tr className="border border-slate-300 bg-slate-50 text-left uppercase tracking-wide text-slate-500">
                   <th className="border border-slate-300 px-1.5 py-1.5">Titik Sampling</th>
@@ -776,9 +816,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
               </thead>
               <tbody>
                 {weeks.map((grp) => {
-                  const override = kontrolRecords.find((r) => r.weekKey === grp.wk.key && r.system === systemKey);
-                  const def = kontrolRecords.find((r) => r.weekKey === grp.wk.key && r.system === "");
-                  const rec = override || def || {};
+                  const rec = findKontrolMingguan(kontrolRecords, grp.wk.key, systemKey, monthKey) || {};
                   // Deviasi Kontrol Mingguan berlaku untuk SEMUA baris di minggu itu
                   // (kalau kontrolnya tidak valid, seluruh hasil minggu itu diragukan).
                   let weekDeviates = false;
@@ -920,8 +958,28 @@ function emptySignoff() {
 // Diisi 1x per minggu (bukan per baris data POU). Defaultnya SATU nomor yang
 // sama otomatis berlaku untuk semua sistem minggu itu; kalau minggu tertentu
 // nomornya beda untuk sistem ini saja, centang "Khusus sistem ini".
-function KontrolMingguanPanel({ systemKey, jenis, entries, records, canInput, saving, onSave }) {
+function emptyKontrolFields() {
+  return {
+    noKontrolMedia: "", noKontrolBakteri: "", kontrolPositif: "", kontrolNegatif: "",
+    kontrolNegatifLAL: "", kontrolPositifLAL: "", noBetLAL: "", noBetCSE: "", sensitivitasLAL: "", sensitivitasCSE: "",
+  };
+}
+
+function kontrolFieldsFrom(rec) {
+  const f = emptyKontrolFields();
+  Object.keys(f).forEach((k) => { f[k] = rec?.[k] || ""; });
+  return f;
+}
+
+// Default diisi 1x per BULAN (bukan per minggu) dan otomatis berlaku untuk
+// seluruh minggu & sistem bulan itu. Kalau ada minggu tertentu yang perlu
+// dibedakan, tambahkan sebagai "pengecualian" dengan memilih minggu ke
+// berapa yang mau diganti — pengecualian ini menang dari default untuk
+// minggu itu saja (dan bisa dibatasi cuma untuk sistem ini lewat centang
+// "Khusus sistem ini").
+function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, canInput, saving, onSave }) {
   const isWFIType = jenis === "WFI" || jenis === "Pure Steam";
+
   const weeks = useMemo(() => {
     const map = new Map();
     entries.forEach((e) => {
@@ -932,81 +990,167 @@ function KontrolMingguanPanel({ systemKey, jenis, entries, records, canInput, sa
     return Array.from(map.values()).sort((a, b) => (a.year - b.year) || (a.month - b.month) || (a.weekNum - b.weekNum));
   }, [entries]);
 
-  const [rows, setRows] = useState({});
+  const [defaultRow, setDefaultRow] = useState(emptyKontrolFields());
+  const [defaultLoaded, setDefaultLoaded] = useState(false);
+  const [exceptions, setExceptions] = useState({}); // { [weekKey]: {...fields, overrideThisSystem, hadOverrideInitially} }
+  const [addWeekKey, setAddWeekKey] = useState("");
+  const [pendingClears, setPendingClears] = useState([]);
 
+  // Muat nilai default bulan ini (weekKey = monthKey, system kosong).
   useEffect(() => {
-    setRows((prev) => {
-      const next = {};
-      weeks.forEach((wk) => {
-        const override = records.find((r) => r.weekKey === wk.key && r.system === systemKey);
-        const def = records.find((r) => r.weekKey === wk.key && r.system === "");
-        const existing = prev[wk.key];
-        const source = override || def;
-        next[wk.key] = existing || {
-          noKontrolMedia: source?.noKontrolMedia || "",
-          noKontrolBakteri: source?.noKontrolBakteri || "",
-          kontrolPositif: source?.kontrolPositif || "",
-          kontrolNegatif: source?.kontrolNegatif || "",
-          kontrolNegatifLAL: source?.kontrolNegatifLAL || "",
-          kontrolPositifLAL: source?.kontrolPositifLAL || "",
-          noBetLAL: source?.noBetLAL || "",
-          noBetCSE: source?.noBetCSE || "",
-          sensitivitasLAL: source?.sensitivitasLAL || "",
-          sensitivitasCSE: source?.sensitivitasCSE || "",
-          overrideThisSystem: !!override,
-          hadOverrideInitially: !!override,
-        };
+    if (defaultLoaded) return; // jangan timpa suntingan lokal yang belum disimpan
+    const rec = records.find((r) => r.weekKey === monthKey && r.system === "");
+    if (rec) setDefaultRow(kontrolFieldsFrom(rec));
+    setDefaultLoaded(true);
+  }, [records, monthKey, defaultLoaded]);
+
+  // Muat daftar pengecualian minggu yang sudah ada (weekKey = "monthKey-Wn"),
+  // pilih override khusus sistem ini kalau ada, kalau tidak pakai yang
+  // berlaku semua sistem — tanpa menimpa baris yang sedang disunting lokal.
+  useEffect(() => {
+    const prefix = monthKey + "-W";
+    const relevant = records.filter((r) => r.weekKey.indexOf(prefix) === 0);
+    setExceptions((prev) => {
+      const next = { ...prev };
+      const byWeek = new Map();
+      relevant.forEach((r) => {
+        const cur = byWeek.get(r.weekKey);
+        if (!cur || r.system === systemKey) byWeek.set(r.weekKey, r);
+      });
+      byWeek.forEach((r, weekKey) => {
+        if (next[weekKey]) return; // sudah ada di state lokal, jangan ditimpa
+        next[weekKey] = { ...kontrolFieldsFrom(r), overrideThisSystem: r.system === systemKey, hadOverrideInitially: r.system === systemKey };
       });
       return next;
     });
-  }, [weeks, records, systemKey]);
+  }, [records, monthKey, systemKey]);
 
-  function updateRow(weekKey, patch) {
-    setRows((prev) => ({ ...prev, [weekKey]: { ...prev[weekKey], ...patch } }));
+  function updateDefault(patch) {
+    setDefaultRow((prev) => ({ ...prev, ...patch }));
   }
+
+  function updateException(weekKey, patch) {
+    setExceptions((prev) => ({ ...prev, [weekKey]: { ...prev[weekKey], ...patch } }));
+  }
+
+  function addException() {
+    if (!addWeekKey) return;
+    setExceptions((prev) => ({
+      ...prev,
+      [addWeekKey]: { ...defaultRow, overrideThisSystem: false, hadOverrideInitially: false },
+    }));
+    setAddWeekKey("");
+  }
+
+  function removeException(weekKey) {
+    setExceptions((prev) => {
+      const { [weekKey]: removedRow, ...rest } = prev;
+      return rest;
+    });
+    if (exceptions[weekKey]?.hadOverrideInitially) {
+      setPendingClears((prev) => [...prev, { weekKey, system: systemKey }]);
+    } else {
+      setPendingClears((prev) => [...prev, { weekKey, system: "" }]);
+    }
+  }
+
+  const exceptionWeekKeys = Object.keys(exceptions).sort();
+  const addableWeeks = weeks.filter((wk) => !exceptions[wk.key]);
 
   function handleSaveAll() {
-    const out = [];
-    const fields = (row) => ({
-      noKontrolMedia: row.noKontrolMedia, noKontrolBakteri: row.noKontrolBakteri,
-      kontrolPositif: row.kontrolPositif, kontrolNegatif: row.kontrolNegatif,
-      kontrolNegatifLAL: row.kontrolNegatifLAL || "", kontrolPositifLAL: row.kontrolPositifLAL || "",
-      noBetLAL: row.noBetLAL || "", noBetCSE: row.noBetCSE || "",
-      sensitivitasLAL: row.sensitivitasLAL || "", sensitivitasCSE: row.sensitivitasCSE || "",
-    });
-    weeks.forEach((wk) => {
-      const row = rows[wk.key];
-      if (!row) return;
-      if (row.overrideThisSystem) {
-        out.push({ weekKey: wk.key, system: systemKey, ...fields(row) });
-      } else {
-        // Bukan override -> nilai berlaku sebagai default (semua sistem).
-        out.push({ weekKey: wk.key, system: "", ...fields(row) });
-        // Kalau minggu ini SEBELUMNYA punya override khusus sistem ini,
-        // tapi sekarang dilepas centangnya -> kosongkan override lamanya
-        // supaya tidak jadi data basi yang tetap dipakai (override menang
-        // dari default di findKontrolMingguan_).
-        if (row.hadOverrideInitially) {
-          out.push({
-            weekKey: wk.key, system: systemKey,
-            noKontrolMedia: "", noKontrolBakteri: "", kontrolPositif: "", kontrolNegatif: "",
-            kontrolNegatifLAL: "", kontrolPositifLAL: "", noBetLAL: "", noBetCSE: "",
-            sensitivitasLAL: "", sensitivitasCSE: "",
-          });
-        }
+    const out = [{ weekKey: monthKey, system: "", ...defaultRow }];
+    exceptionWeekKeys.forEach((weekKey) => {
+      const row = exceptions[weekKey];
+      out.push({ weekKey, system: row.overrideThisSystem ? systemKey : "", ...kontrolFieldsFrom(row) });
+      // Kalau override-nya baru saja dipindah dari "semua sistem" ke "khusus
+      // sistem ini" (atau sebaliknya), kosongkan versi lama supaya tidak
+      // jadi data basi yang tetap ditemukan lookup.
+      if (row.overrideThisSystem && !row.hadOverrideInitially) {
+        out.push({ weekKey, system: "", ...emptyKontrolFields() });
+      } else if (!row.overrideThisSystem && row.hadOverrideInitially) {
+        out.push({ weekKey, system: systemKey, ...emptyKontrolFields() });
       }
     });
+    pendingClears.forEach((c) => out.push({ weekKey: c.weekKey, system: c.system, ...emptyKontrolFields() }));
     onSave(out);
+    setPendingClears([]);
   }
 
-  if (weeks.length === 0) return null;
+  function renderFieldInputs(row, onPatch) {
+    return (
+      <>
+        <td className="px-3 py-2">
+          <input type="text" disabled={!canInput} value={row.noKontrolMedia || ""} placeholder="-"
+            onChange={(ev) => onPatch({ noKontrolMedia: ev.target.value })}
+            className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+        </td>
+        <td className="px-3 py-2">
+          <input type="text" disabled={!canInput} value={row.noKontrolBakteri || ""} placeholder="-"
+            onChange={(ev) => onPatch({ noKontrolBakteri: ev.target.value })}
+            className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+        </td>
+        <td className="px-3 py-2">
+          <select disabled={!canInput} value={row.kontrolPositif || ""} onChange={(ev) => onPatch({ kontrolPositif: ev.target.value })}
+            className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
+            <option value="">-</option>
+            {QUALI_OPTIONS.kontrolPositif.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </td>
+        <td className="px-3 py-2">
+          <select disabled={!canInput} value={row.kontrolNegatif || ""} onChange={(ev) => onPatch({ kontrolNegatif: ev.target.value })}
+            className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
+            <option value="">-</option>
+            {QUALI_OPTIONS.kontrolNegatif.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </td>
+        {isWFIType && (
+          <>
+            <td className="px-3 py-2">
+              <select disabled={!canInput} value={row.kontrolNegatifLAL || ""} onChange={(ev) => onPatch({ kontrolNegatifLAL: ev.target.value })}
+                className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
+                <option value="">-</option>
+                {QUALI_OPTIONS.kontrolNegatif.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </td>
+            <td className="px-3 py-2">
+              <select disabled={!canInput} value={row.kontrolPositifLAL || ""} onChange={(ev) => onPatch({ kontrolPositifLAL: ev.target.value })}
+                className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
+                <option value="">-</option>
+                {QUALI_OPTIONS.kontrolPositif.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </td>
+            <td className="px-3 py-2">
+              <input type="text" disabled={!canInput} value={row.noBetLAL || ""} placeholder="-"
+                onChange={(ev) => onPatch({ noBetLAL: ev.target.value })}
+                className="w-24 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+            </td>
+            <td className="px-3 py-2">
+              <input type="text" disabled={!canInput} value={row.noBetCSE || ""} placeholder="-"
+                onChange={(ev) => onPatch({ noBetCSE: ev.target.value })}
+                className="w-24 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+            </td>
+            <td className="px-3 py-2">
+              <input type="text" disabled={!canInput} value={row.sensitivitasLAL || ""} placeholder="-"
+                onChange={(ev) => onPatch({ sensitivitasLAL: normalizeNumericInput(ev.target.value) })}
+                className="w-20 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+            </td>
+            <td className="px-3 py-2">
+              <input type="text" disabled={!canInput} value={row.sensitivitasCSE || ""} placeholder="-"
+                onChange={(ev) => onPatch({ sensitivitasCSE: normalizeNumericInput(ev.target.value) })}
+                className="w-20 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+            </td>
+          </>
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="no-print mb-5 rounded-xl border border-slate-200 bg-white p-5">
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h3 className="text-sm font-bold text-slate-700">Kontrol Mingguan</h3>
-          <p className="text-xs text-slate-400">Nomor Kontrol Media/Bakteri &amp; hasil Kontrol Positif/Negatif{isWFIType ? " (mikrobiologi & LAL/Endotoksin)" : ""} — diisi 1x per minggu, otomatis berlaku untuk semua sistem kecuali dicentang khusus.</p>
+          <p className="text-xs text-slate-400">Nomor Kontrol Media/Bakteri &amp; hasil Kontrol Positif/Negatif{isWFIType ? " (mikrobiologi & LAL/Endotoksin)" : ""} — isi sekali, otomatis berlaku untuk seluruh bulan ini &amp; semua sistem. Tambahkan pengecualian kalau ada minggu tertentu yang beda.</p>
         </div>
         {canInput && (
           <button onClick={handleSaveAll} disabled={saving}
@@ -1019,7 +1163,7 @@ function KontrolMingguanPanel({ systemKey, jenis, entries, records, canInput, sa
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-400">
-              <th className="px-3 py-2">Minggu</th>
+              <th className="px-3 py-2">Berlaku untuk</th>
               <th className="px-3 py-2">No. Kontrol Media</th>
               <th className="px-3 py-2">No. Kontrol Bakteri</th>
               <th className="px-3 py-2">Kontrol Positif</th>
@@ -1034,80 +1178,35 @@ function KontrolMingguanPanel({ systemKey, jenis, entries, records, canInput, sa
                   <th className="px-3 py-2">Sensitivitas CSE</th>
                 </>
               )}
-              <th className="px-3 py-2 text-center">Khusus sistem ini</th>
+              <th className="px-3 py-2"></th>
             </tr>
           </thead>
           <tbody>
-            {weeks.map((wk) => {
-              const row = rows[wk.key] || {};
+            <tr className="border-b border-slate-100 bg-blue-50/40">
+              <td className="px-3 py-2 font-medium">Default — seluruh bulan ini</td>
+              {renderFieldInputs(defaultRow, updateDefault)}
+              <td className="px-3 py-2"></td>
+            </tr>
+            {exceptionWeekKeys.map((weekKey) => {
+              const row = exceptions[weekKey];
+              const wk = weeks.find((w) => w.key === weekKey);
               return (
-                <tr key={wk.key} className="border-b border-slate-100 last:border-0">
-                  <td className="px-3 py-2 font-medium">{weekLabel(wk)}</td>
-                  <td className="px-3 py-2">
-                    <input type="text" disabled={!canInput} value={row.noKontrolMedia || ""} placeholder="-"
-                      onChange={(ev) => updateRow(wk.key, { noKontrolMedia: ev.target.value })}
-                      className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
+                <tr key={weekKey} className="border-b border-slate-100 last:border-0">
+                  <td className="px-3 py-2 font-medium">
+                    {wk ? weekLabel(wk) : weekKey}
+                    <label className="mt-1 flex items-center gap-1.5 text-xs font-normal text-slate-500">
+                      <input type="checkbox" disabled={!canInput} checked={!!row.overrideThisSystem}
+                        onChange={(ev) => updateException(weekKey, { overrideThisSystem: ev.target.checked })} />
+                      Khusus sistem ini
+                    </label>
                   </td>
-                  <td className="px-3 py-2">
-                    <input type="text" disabled={!canInput} value={row.noKontrolBakteri || ""} placeholder="-"
-                      onChange={(ev) => updateRow(wk.key, { noKontrolBakteri: ev.target.value })}
-                      className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <select disabled={!canInput} value={row.kontrolPositif || ""} onChange={(ev) => updateRow(wk.key, { kontrolPositif: ev.target.value })}
-                      className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
-                      <option value="">-</option>
-                      {QUALI_OPTIONS.kontrolPositif.map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  </td>
-                  <td className="px-3 py-2">
-                    <select disabled={!canInput} value={row.kontrolNegatif || ""} onChange={(ev) => updateRow(wk.key, { kontrolNegatif: ev.target.value })}
-                      className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
-                      <option value="">-</option>
-                      {QUALI_OPTIONS.kontrolNegatif.map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  </td>
-                  {isWFIType && (
-                    <>
-                      <td className="px-3 py-2">
-                        <select disabled={!canInput} value={row.kontrolNegatifLAL || ""} onChange={(ev) => updateRow(wk.key, { kontrolNegatifLAL: ev.target.value })}
-                          className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
-                          <option value="">-</option>
-                          {QUALI_OPTIONS.kontrolNegatif.map((o) => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                      </td>
-                      <td className="px-3 py-2">
-                        <select disabled={!canInput} value={row.kontrolPositifLAL || ""} onChange={(ev) => updateRow(wk.key, { kontrolPositifLAL: ev.target.value })}
-                          className="w-28 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50">
-                          <option value="">-</option>
-                          {QUALI_OPTIONS.kontrolPositif.map((o) => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                      </td>
-                      <td className="px-3 py-2">
-                        <input type="text" disabled={!canInput} value={row.noBetLAL || ""} placeholder="-"
-                          onChange={(ev) => updateRow(wk.key, { noBetLAL: ev.target.value })}
-                          className="w-24 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input type="text" disabled={!canInput} value={row.noBetCSE || ""} placeholder="-"
-                          onChange={(ev) => updateRow(wk.key, { noBetCSE: ev.target.value })}
-                          className="w-24 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input type="text" disabled={!canInput} value={row.sensitivitasLAL || ""} placeholder="-"
-                          onChange={(ev) => updateRow(wk.key, { sensitivitasLAL: ev.target.value })}
-                          className="w-20 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input type="text" disabled={!canInput} value={row.sensitivitasCSE || ""} placeholder="-"
-                          onChange={(ev) => updateRow(wk.key, { sensitivitasCSE: ev.target.value })}
-                          className="w-20 rounded border border-slate-200 px-2 py-1 text-sm disabled:bg-slate-50" />
-                      </td>
-                    </>
-                  )}
+                  {renderFieldInputs(row, (patch) => updateException(weekKey, patch))}
                   <td className="px-3 py-2 text-center">
-                    <input type="checkbox" disabled={!canInput} checked={!!row.overrideThisSystem}
-                      onChange={(ev) => updateRow(wk.key, { overrideThisSystem: ev.target.checked })} />
+                    {canInput && (
+                      <button onClick={() => removeException(weekKey)} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-500" title="Hapus pengecualian (kembali ke default)">
+                        <Trash2 size={15} />
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -1115,6 +1214,19 @@ function KontrolMingguanPanel({ systemKey, jenis, entries, records, canInput, sa
           </tbody>
         </table>
       </div>
+      {canInput && addableWeeks.length > 0 && (
+        <div className="mt-3 flex items-center gap-2 text-sm">
+          <select value={addWeekKey} onChange={(ev) => setAddWeekKey(ev.target.value)}
+            className="rounded border border-slate-200 px-2 py-1.5 text-sm">
+            <option value="">-- Pilih minggu untuk dikecualikan --</option>
+            {addableWeeks.map((wk) => <option key={wk.key} value={wk.key}>{weekLabel(wk)}</option>)}
+          </select>
+          <button onClick={addException} disabled={!addWeekKey}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+            <Plus size={14} /> Tambah Pengecualian Minggu
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1397,7 +1509,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       </div>
 
       {kontrolError && <p className="no-print mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{kontrolError}</p>}
-      <KontrolMingguanPanel systemKey={systemKey} jenis={system.jenis} entries={entries} records={kontrolRecords}
+      <KontrolMingguanPanel systemKey={systemKey} jenis={system.jenis} monthKey={monthKey} entries={entries} records={kontrolRecords}
         canInput={canInputQC} saving={kontrolSaving} onSave={handleSaveKontrolMingguan} />
 
       <div className="mb-5 rounded-xl border border-slate-200 bg-white p-5 print-card">
