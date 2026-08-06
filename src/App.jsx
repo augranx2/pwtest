@@ -762,7 +762,6 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
 
   const analis = meta?.analis || { nama: "", tanggal: "" };
   const diperiksa = meta?.diperiksa || { nama: "", tanggal: "" };
-  const isApproved = !!diperiksa.nama;
 
   // Total kolom (buat colSpan baris header "Minggu N"): Titik + Tanggal +
   // baseParams + 4 kolom kontrol mikro + Tanggal Baca + (WFI/Pure Steam: 1
@@ -930,49 +929,44 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
             </table>
           </div>
 
-          <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
-            <div>
-              <p className="mb-1 text-xs font-semibold uppercase text-slate-400">Diperiksa oleh</p>
-              <div className="mb-2 flex h-24 items-center justify-center rounded border border-dashed border-slate-300 print:h-28">
-                {analis.nama ? (
-                  <VerifyQR type="reportHasil" system={systemKey} period={monthKey} slot="analis" size={64} />
-                ) : (
-                  <span className="only-screen text-xs text-slate-300">Ruang tanda tangan</span>
-                )}
-              </div>
-              <p className="text-sm font-medium">{analis.nama || "-"}</p>
-              <p className="text-xs text-slate-400">{analis.tanggal ? fullDateID(analis.tanggal) : ""}</p>
+          <div className="mt-6 rounded-xl border border-slate-200 p-5 print-card">
+            <h3 className="mb-3 text-sm font-bold text-slate-700">Tanda Tangan</h3>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {[
+                { field: "analis", label: "Diperiksa Oleh", nama: analis.nama, tanggal: analis.tanggal,
+                  canApprove: canInput, onApprove: handleSave,
+                  disabledNote: "Hanya Staff s/d Manager QC yang bisa menandatangani" },
+                { field: "diperiksa", label: "Mengetahui", nama: diperiksa.nama, tanggal: diperiksa.tanggal,
+                  canApprove: canApprove, onApprove: handleApprove,
+                  disabledNote: analis.nama ? "Hanya Supervisor s/d Manager QC yang bisa menyetujui" : "Menunggu tanda tangan \"Diperiksa Oleh\" terlebih dahulu" },
+              ].map(({ field, label, nama, tanggal, canApprove: fieldCanApprove, onApprove, disabledNote }) => (
+                <div key={field} className="rounded-lg border border-slate-200 p-3">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+                  <div className="mb-3 flex h-24 items-center justify-center rounded border border-dashed border-slate-300 print:h-28">
+                    {nama ? (
+                      <VerifyQR type="reportHasil" system={systemKey} period={monthKey} slot={field} size={68} />
+                    ) : (
+                      <span className="only-screen text-xs text-slate-300">Ruang tanda tangan</span>
+                    )}
+                  </div>
+                  {nama ? (
+                    <div className="space-y-1 text-sm">
+                      <p className="font-semibold text-slate-700">{nama}</p>
+                      <p className="text-xs text-slate-400">{tanggal ? fullDateID(tanggal) : ""}</p>
+                    </div>
+                  ) : field === "diperiksa" && !analis.nama ? (
+                    <p className="no-print inline-flex items-center gap-1.5 text-xs text-slate-400"><Lock size={12} /> {disabledNote}</p>
+                  ) : fieldCanApprove ? (
+                    <button onClick={onApprove} disabled={saving || approving}
+                      className="no-print inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">
+                      {(saving || approving) ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Setujui &amp; Tanda Tangani
+                    </button>
+                  ) : (
+                    <p className="no-print inline-flex items-center gap-1.5 text-xs text-slate-400"><Lock size={12} /> {disabledNote}</p>
+                  )}
+                </div>
+              ))}
             </div>
-            <div>
-              <p className="mb-1 text-xs font-semibold uppercase text-slate-400">Mengetahui</p>
-              <div className="mb-2 flex h-24 items-center justify-center rounded border border-dashed border-slate-300 print:h-28">
-                {diperiksa.nama ? (
-                  <VerifyQR type="reportHasil" system={systemKey} period={monthKey} slot="diperiksa" size={64} />
-                ) : (
-                  <span className="only-screen text-xs text-slate-300">Ruang tanda tangan</span>
-                )}
-              </div>
-              <p className="text-sm font-medium">{diperiksa.nama || "-"}</p>
-              <p className="text-xs text-slate-400">{diperiksa.tanggal ? fullDateID(diperiksa.tanggal) : ""}</p>
-            </div>
-          </div>
-
-          <div className="no-print mt-6 flex justify-end gap-2">
-            {canInput && !isApproved && (
-              <button onClick={handleSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60">
-                {saving ? <Loader2 size={14} className="animate-spin" /> : null} {analis.nama ? "Perbarui" : "Tandatangani (Diperiksa oleh)"}
-              </button>
-            )}
-            {canApprove && !isApproved && analis.nama && (
-              <button onClick={handleApprove} disabled={approving} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60">
-                {approving ? <Loader2 size={14} className="animate-spin" /> : null} Setujui (Mengetahui)
-              </button>
-            )}
-            {isApproved && (
-              <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700">
-                <CheckCircle2 size={15} /> Sudah disetujui
-              </span>
-            )}
           </div>
         </div>
       )}
