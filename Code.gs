@@ -820,7 +820,7 @@ function findReportHasilRow_(systemKey, month) {
   if (lastRow < 2) return { sheet: sheet, rowIndex: -1, row: null };
   const values = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
   for (let i = 0; i < values.length; i++) {
-    if (String(values[i][0] || "").trim() === systemKey && String(values[i][1] || "").trim() === month) {
+    if (String(values[i][0] || "").trim() === systemKey && formatMonth_(values[i][1]) === month) {
       return { sheet: sheet, rowIndex: i + 2, row: values[i] };
     }
   }
@@ -866,11 +866,13 @@ function saveReportHasilAuthed_(session, systemKey, month) {
     diperiksaNama, diperiksaUsername, diperiksaTanggal,
     now,
   ];
-  if (isNew) {
-    found.sheet.appendRow(rowValues);
-  } else {
-    found.sheet.getRange(found.rowIndex, 1, 1, rowValues.length).setValues([rowValues]);
-  }
+  // Kolom B (Month) dipaksa format Teks Biasa SEBELUM ditulis — supaya
+  // Google Sheets tidak otomatis mengonversi "2026-08" jadi tanggal (itulah
+  // sebabnya findReportHasilRow_ di atas pakai formatMonth_ saat membaca,
+  // supaya baris lama yang sudah terlanjur terkonversi tetap ketemu).
+  const targetRow = isNew ? found.sheet.getLastRow() + 1 : found.rowIndex;
+  found.sheet.getRange(targetRow, 2).setNumberFormat("@");
+  found.sheet.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
 
   writeAuditLog_({
     username: session.username, nama: session.nama, role: session.role, departemen: session.departemen,
@@ -898,6 +900,7 @@ function approveReportHasilAuthed_(session, systemKey, month) {
     session.nama, session.username, formatDate_(now),
     now,
   ];
+  found.sheet.getRange(found.rowIndex, 2).setNumberFormat("@");
   found.sheet.getRange(found.rowIndex, 1, 1, rowValues.length).setValues([rowValues]);
 
   writeAuditLog_({
