@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
+import { createPortal } from "react-dom";
 import { QRCodeSVG } from "qrcode.react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -17,7 +18,7 @@ import {
   changePassword as apiChangePassword,
   fetchKontrolMingguan, saveKontrolMingguan as apiSaveKontrolMingguan,
 } from "./api.js";
-import { generateLocalNarrative, PARAM_META, PARAMS_BY_JENIS, LIMITS, getLimit, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel, findKontrolMingguan } from "./narrativeGenerator.js";
+import { generateLocalNarrative, PARAM_META, PARAMS_BY_JENIS, LIMITS, getLimit, QUALI_OPTIONS, statusFor, parseNumericValue, fullDateID, weekKeyForISO, weekLabel, findKontrolMingguan, monthDefaultWeekKey } from "./narrativeGenerator.js";
 import { useAuth, hasAccess } from "./auth.js";
 
 // Sistem air TETAP (harus persis sinkron dengan SYSTEMS di Code.gs)
@@ -127,30 +128,58 @@ function idToISO(text) {
 function DateInputID({ value, onChange, disabled, className }) {
   const [text, setText] = useState(isoToID(value));
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null); // {top, left} posisi kalender, dihitung dari input (position: fixed)
   const [viewYM, setViewYM] = useState(() => {
     const iso = value || todayISO();
     const [y, m] = iso.split("-");
     return { y: Number(y), m: Number(m) - 1 };
   });
-  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+  const popRef = useRef(null);
 
   useEffect(() => { setText(isoToID(value)); }, [value]);
 
-  // Klik di luar kalender otomatis menutupnya.
+  // Klik di luar input MAUPUN di luar kalender (yang sekarang di-portal ke
+  // body, jadi tidak selalu "di dalam" DOM input) otomatis menutupnya.
   useEffect(() => {
     if (!open) return;
     function onDocClick(ev) {
-      if (wrapRef.current && !wrapRef.current.contains(ev.target)) setOpen(false);
+      if (inputRef.current && inputRef.current.contains(ev.target)) return;
+      if (popRef.current && popRef.current.contains(ev.target)) return;
+      setOpen(false);
     }
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    // Tutup juga kalau halaman di-scroll, supaya posisi kalender tidak "nyangkut"
+    // salah tempat relatif terhadap input yang sudah bergeser.
+    function onScroll() { setOpen(false); }
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      window.removeEventListener("scroll", onScroll, true);
+    };
   }, [open]);
+
+  function computePos() {
+    const el = inputRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const popW = 224; // w-56
+    const popH = 230; // perkiraan tinggi kalender
+    let top = rect.bottom + 4;
+    let left = rect.left;
+    // Kalau kalender bakal kepotong di bawah layar, buka ke ATAS input.
+    if (top + popH > window.innerHeight) top = rect.top - popH - 4;
+    // Kalau kepotong di kanan layar, geser ke kiri secukupnya.
+    if (left + popW > window.innerWidth) left = Math.max(4, window.innerWidth - popW - 4);
+    return { top, left };
+  }
 
   function openCalendar() {
     if (disabled) return;
     const iso = value || idToISO(text) || todayISO();
     const [y, m] = iso.split("-");
     setViewYM({ y: Number(y), m: Number(m) - 1 });
+    setPos(computePos());
     setOpen(true);
   }
 
@@ -177,9 +206,10 @@ function DateInputID({ value, onChange, disabled, className }) {
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
 
   return (
-    <div className="relative inline-block" ref={wrapRef}>
+    <div className="relative inline-block">
       <div className="relative">
         <input
+          ref={inputRef}
           type="text"
           inputMode="numeric"
           placeholder="dd/mm/yyyy"
@@ -207,8 +237,12 @@ function DateInputID({ value, onChange, disabled, className }) {
           </button>
         )}
       </div>
-      {open && !disabled && (
-        <div className="only-screen absolute z-50 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-2.5 text-left shadow-lg">
+      {open && !disabled && pos && createPortal(
+        <div
+          ref={popRef}
+          className="only-screen fixed z-50 w-56 rounded-lg border border-slate-200 bg-white p-2.5 text-left shadow-lg"
+          style={{ top: pos.top, left: pos.left }}
+        >
           <div className="mb-2 flex items-center justify-between">
             <button type="button" onClick={() => shiftMonth(-1)} className="rounded px-1.5 py-0.5 text-slate-500 hover:bg-slate-100">‹</button>
             <span className="text-xs font-semibold text-slate-700">{MONTHS_ID_FULL[viewYM.m]} {viewYM.y}</span>
@@ -234,7 +268,8 @@ function DateInputID({ value, onChange, disabled, className }) {
               );
             })}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -971,14 +1006,16 @@ function kontrolFieldsFrom(rec) {
   return f;
 }
 
-// Default diisi 1x per BULAN (bukan per minggu) dan otomatis berlaku untuk
-// seluruh minggu & sistem bulan itu. Kalau ada minggu tertentu yang perlu
-// dibedakan, tambahkan sebagai "pengecualian" dengan memilih minggu ke
-// berapa yang mau diganti — pengecualian ini menang dari default untuk
-// minggu itu saja (dan bisa dibatasi cuma untuk sistem ini lewat centang
-// "Khusus sistem ini").
+// Default diisi 1x per BULAN dan otomatis berlaku untuk seluruh minggu bulan
+// itu — TAPI HANYA untuk fasilitas (sistem) ini sendiri. Fasilitas lain yang
+// looping di bulan yang sama tetap wajib mengisi Default-nya masing-masing
+// (walau angkanya kebetulan sama). Kalau ada minggu tertentu yang perlu
+// dibedakan lagi, tambahkan sebagai "pengecualian" dengan memilih minggu ke
+// berapa yang mau diganti — pengecualian ini menang dari Default untuk
+// minggu itu saja.
 function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, canInput, saving, onSave }) {
   const isWFIType = jenis === "WFI" || jenis === "Pure Steam";
+  const defaultWeekKey = monthDefaultWeekKey(monthKey);
 
   const weeks = useMemo(() => {
     const map = new Map();
@@ -990,40 +1027,32 @@ function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, ca
     return Array.from(map.values()).sort((a, b) => (a.year - b.year) || (a.month - b.month) || (a.weekNum - b.weekNum));
   }, [entries]);
 
-  const [defaultRow, setDefaultRow] = useState(emptyKontrolFields());
-  const [defaultLoaded, setDefaultLoaded] = useState(false);
-  const [exceptions, setExceptions] = useState({}); // { [weekKey]: {...fields, overrideThisSystem, hadOverrideInitially} }
+  // Inisialisasi LANGSUNG dari props saat komponen ini dipasang (mount) —
+  // bukan lewat useEffect + flag "sudah dimuat" (itu yang sebelumnya bikin
+  // data kadang tidak muncul lagi setelah balik dari halaman print: begitu
+  // flag itu keburu "true", data baru dari server tidak pernah disinkron
+  // ulang). Karena panel ini betul-betul dipasang ulang (unmount lalu mount
+  // lagi) tiap kali pindah dari/ke halaman Formulir QC, initializer ini akan
+  // selalu jalan dengan data terbaru yang sudah dimuat SystemDetail.
+  const [defaultRow, setDefaultRow] = useState(() => {
+    const rec = records.find((r) => r.weekKey === defaultWeekKey && r.system === systemKey);
+    return kontrolFieldsFrom(rec);
+  });
+
+  const [exceptions, setExceptions] = useState(() => {
+    const prefix = monthKey + "-W";
+    const init = {};
+    records.forEach((r) => {
+      if (r.weekKey.indexOf(prefix) !== 0) return;
+      if (r.weekKey === defaultWeekKey) return; // itu Default, bukan pengecualian
+      if (r.system !== systemKey) return;
+      init[r.weekKey] = kontrolFieldsFrom(r);
+    });
+    return init;
+  });
+
   const [addWeekKey, setAddWeekKey] = useState("");
   const [pendingClears, setPendingClears] = useState([]);
-
-  // Muat nilai default bulan ini (weekKey = monthKey, system kosong).
-  useEffect(() => {
-    if (defaultLoaded) return; // jangan timpa suntingan lokal yang belum disimpan
-    const rec = records.find((r) => r.weekKey === monthKey && r.system === "");
-    if (rec) setDefaultRow(kontrolFieldsFrom(rec));
-    setDefaultLoaded(true);
-  }, [records, monthKey, defaultLoaded]);
-
-  // Muat daftar pengecualian minggu yang sudah ada (weekKey = "monthKey-Wn"),
-  // pilih override khusus sistem ini kalau ada, kalau tidak pakai yang
-  // berlaku semua sistem — tanpa menimpa baris yang sedang disunting lokal.
-  useEffect(() => {
-    const prefix = monthKey + "-W";
-    const relevant = records.filter((r) => r.weekKey.indexOf(prefix) === 0);
-    setExceptions((prev) => {
-      const next = { ...prev };
-      const byWeek = new Map();
-      relevant.forEach((r) => {
-        const cur = byWeek.get(r.weekKey);
-        if (!cur || r.system === systemKey) byWeek.set(r.weekKey, r);
-      });
-      byWeek.forEach((r, weekKey) => {
-        if (next[weekKey]) return; // sudah ada di state lokal, jangan ditimpa
-        next[weekKey] = { ...kontrolFieldsFrom(r), overrideThisSystem: r.system === systemKey, hadOverrideInitially: r.system === systemKey };
-      });
-      return next;
-    });
-  }, [records, monthKey, systemKey]);
 
   function updateDefault(patch) {
     setDefaultRow((prev) => ({ ...prev, ...patch }));
@@ -1035,43 +1064,30 @@ function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, ca
 
   function addException() {
     if (!addWeekKey) return;
-    setExceptions((prev) => ({
-      ...prev,
-      [addWeekKey]: { ...defaultRow, overrideThisSystem: false, hadOverrideInitially: false },
-    }));
+    setExceptions((prev) => ({ ...prev, [addWeekKey]: { ...defaultRow } }));
     setAddWeekKey("");
   }
 
   function removeException(weekKey) {
     setExceptions((prev) => {
-      const { [weekKey]: removedRow, ...rest } = prev;
+      const { [weekKey]: _removed, ...rest } = prev;
       return rest;
     });
-    if (exceptions[weekKey]?.hadOverrideInitially) {
-      setPendingClears((prev) => [...prev, { weekKey, system: systemKey }]);
-    } else {
-      setPendingClears((prev) => [...prev, { weekKey, system: "" }]);
-    }
+    setPendingClears((prev) => [...prev, weekKey]);
   }
 
   const exceptionWeekKeys = Object.keys(exceptions).sort();
   const addableWeeks = weeks.filter((wk) => !exceptions[wk.key]);
 
   function handleSaveAll() {
-    const out = [{ weekKey: monthKey, system: "", ...defaultRow }];
+    const out = [{ weekKey: defaultWeekKey, system: systemKey, ...defaultRow }];
     exceptionWeekKeys.forEach((weekKey) => {
-      const row = exceptions[weekKey];
-      out.push({ weekKey, system: row.overrideThisSystem ? systemKey : "", ...kontrolFieldsFrom(row) });
-      // Kalau override-nya baru saja dipindah dari "semua sistem" ke "khusus
-      // sistem ini" (atau sebaliknya), kosongkan versi lama supaya tidak
-      // jadi data basi yang tetap ditemukan lookup.
-      if (row.overrideThisSystem && !row.hadOverrideInitially) {
-        out.push({ weekKey, system: "", ...emptyKontrolFields() });
-      } else if (!row.overrideThisSystem && row.hadOverrideInitially) {
-        out.push({ weekKey, system: systemKey, ...emptyKontrolFields() });
-      }
+      out.push({ weekKey, system: systemKey, ...kontrolFieldsFrom(exceptions[weekKey]) });
     });
-    pendingClears.forEach((c) => out.push({ weekKey: c.weekKey, system: c.system, ...emptyKontrolFields() }));
+    // Pengecualian yang barusan dihapus di layar -> kosongkan juga di server
+    // (bukan cuma disembunyikan di layar) supaya minggu itu betul-betul
+    // kembali mengikuti Default, bukan nyangkut ke data lama yang basi.
+    pendingClears.forEach((weekKey) => out.push({ weekKey, system: systemKey, ...emptyKontrolFields() }));
     onSave(out);
     setPendingClears([]);
   }
@@ -1150,7 +1166,7 @@ function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, ca
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h3 className="text-sm font-bold text-slate-700">Kontrol Mingguan</h3>
-          <p className="text-xs text-slate-400">Nomor Kontrol Media/Bakteri &amp; hasil Kontrol Positif/Negatif{isWFIType ? " (mikrobiologi & LAL/Endotoksin)" : ""} — isi sekali, otomatis berlaku untuk seluruh bulan ini &amp; semua sistem. Tambahkan pengecualian kalau ada minggu tertentu yang beda.</p>
+          <p className="text-xs text-slate-400">Nomor Kontrol Media/Bakteri &amp; hasil Kontrol Positif/Negatif{isWFIType ? " (mikrobiologi & LAL/Endotoksin)" : ""} — isi sekali untuk fasilitas ini, otomatis berlaku untuk seluruh bulan ini. Tambahkan pengecualian kalau ada minggu tertentu yang beda.</p>
         </div>
         {canInput && (
           <button onClick={handleSaveAll} disabled={saving}
@@ -1183,7 +1199,7 @@ function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, ca
           </thead>
           <tbody>
             <tr className="border-b border-slate-100 bg-blue-50/40">
-              <td className="px-3 py-2 font-medium">Default — seluruh bulan ini</td>
+              <td className="px-3 py-2 font-medium">Default — seluruh bulan ini<br /><span className="font-normal text-xs text-slate-400">(khusus fasilitas ini)</span></td>
               {renderFieldInputs(defaultRow, updateDefault)}
               <td className="px-3 py-2"></td>
             </tr>
@@ -1192,14 +1208,7 @@ function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, ca
               const wk = weeks.find((w) => w.key === weekKey);
               return (
                 <tr key={weekKey} className="border-b border-slate-100 last:border-0">
-                  <td className="px-3 py-2 font-medium">
-                    {wk ? weekLabel(wk) : weekKey}
-                    <label className="mt-1 flex items-center gap-1.5 text-xs font-normal text-slate-500">
-                      <input type="checkbox" disabled={!canInput} checked={!!row.overrideThisSystem}
-                        onChange={(ev) => updateException(weekKey, { overrideThisSystem: ev.target.checked })} />
-                      Khusus sistem ini
-                    </label>
-                  </td>
+                  <td className="px-3 py-2 font-medium">{wk ? weekLabel(wk) : weekKey}</td>
                   {renderFieldInputs(row, (patch) => updateException(weekKey, patch))}
                   <td className="px-3 py-2 text-center">
                     {canInput && (
@@ -1230,7 +1239,6 @@ function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, ca
     </div>
   );
 }
-
 /* ========================================================================= SYSTEM DETAIL (halaman Pengkajian SPA) */
 function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, session, token }) {
   const system = SYSTEMS.find((s) => s.key === systemKey);

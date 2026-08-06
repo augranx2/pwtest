@@ -19,21 +19,29 @@
  *   Pengkajian_Narasi: System | Bulan | Pendahuluan | PerParameterJSON | ReviewTren |
  *                       Kesimpulan | DinilaiNama | DinilaiJabatan | DinilaiTanggal |
  *                       DiperiksaNama | DiperiksaJabatan | DiperiksaTanggal | UpdatedAt
- *   Report_Hasil     : System | Tanggal | AnalisNama | AnalisUsername | AnalisTanggal |
+ *   Report_Hasil     : System | Bulan | AnalisNama | AnalisUsername | AnalisTanggal |
  *                       DiperiksaNama | DiperiksaUsername | DiperiksaTanggal | UpdatedAt
+ *                       (Bulan berformat "yyyy-MM" — 1 formulir = 1 bulan penuh)
  *   Kontrol_Mingguan : WeekKey | System | NoKontrolMedia | NoKontrolBakteri |
- *                       KontrolPositif | KontrolNegatif | UpdatedBy | UpdatedAt
+ *                       KontrolPositif | KontrolNegatif | KontrolNegatifLAL |
+ *                       KontrolPositifLAL | NoBetLAL | NoBetCSE | SensitivitasLAL |
+ *                       SensitivitasCSE | UpdatedBy | UpdatedAt
  *                       (Nomor Kontrol Media/Bakteri + hasil Kontrol Positif/
- *                       Negatif diisi SEKALI PER MINGGU, bukan per baris data.
- *                       Baris dengan System KOSONG = nilai default yang
- *                       berlaku untuk SEMUA sistem minggu itu; baris dengan
- *                       System diisi = pengecualian/override khusus sistem
- *                       itu saja untuk minggu yang sama. WeekKey berformat
- *                       "yyyy-MM-Wn", 1 minggu = Senin-Jumat; kalau Senin-
- *                       Jumat itu memotong 2 bulan, hari-harinya dipecah:
- *                       ikut minggu TERAKHIR bulan sebelumnya / minggu
- *                       PERTAMA bulan berikutnya, sesuai bulan kalendernya
- *                       masing-masing.)
+ *                       Negatif SELALU per fasilitas/sistem (kolom System
+ *                       WAJIB diisi kode sistem, TIDAK PERNAH dikosongkan
+ *                       untuk "berlaku semua sistem"). Baris Default diisi
+ *                       SEKALI PER BULAN dengan WeekKey format "yyyy-MM-W0"
+ *                       (bukan "yyyy-MM" polos, supaya tidak salah dikonversi
+ *                       jadi tanggal oleh Google Sheets) dan otomatis berlaku
+ *                       untuk seluruh minggu bulan itu — TAPI HANYA untuk
+ *                       fasilitas itu sendiri; fasilitas lain di bulan yang
+ *                       sama tetap wajib mengisi Default-nya masing-masing.
+ *                       Baris pengecualian minggu tertentu pakai WeekKey
+ *                       format "yyyy-MM-Wn" (n mulai 1) — 1 minggu = Senin-
+ *                       Jumat; kalau Senin-Jumat itu memotong 2 bulan, hari-
+ *                       harinya dipecah: ikut minggu TERAKHIR bulan
+ *                       sebelumnya / minggu PERTAMA bulan berikutnya, sesuai
+ *                       bulan kalendernya masing-masing.)
  *
  * PLUS 2 tab per sistem (5 sistem = 10 tab tambahan), namanya harus PERSIS
  * seperti di SYSTEMS di bawah (masterSheet & dataSheet):
@@ -92,8 +100,9 @@ const SYSTEMS = {
 
 // Parameter yang dievaluasi tiap jenis air. PW tidak ada Endotoksin.
 // (Kontrol Positif/Kontrol Negatif TIDAK lagi di sini — sekarang jadi data
-// MINGGUAN terpisah di tab Kontrol_Mingguan, karena berlaku untuk SEMUA
-// sistem termasuk PW, mengikuti Nomor Kontrol Media/Bakteri minggu itu.)
+// MINGGUAN terpisah di tab Kontrol_Mingguan, karena berlaku untuk PW juga
+// (mengikuti Nomor Kontrol Media/Bakteri) — tapi diisi TERPISAH per
+// fasilitas/sistem, bukan otomatis dibagi ke semua fasilitas.)
 const PARAMS_BY_JENIS = {
   PW: ["kejernihan", "warna", "bau", "konduktivitas", "ph", "toc", "mikrobiologi"],
   WFI: ["kejernihan", "warna", "bau", "konduktivitas", "ph", "toc", "mikrobiologi", "endotoksin"],
@@ -900,14 +909,15 @@ function approveReportHasilAuthed_(session, systemKey, month) {
 }
 
 // ---------------------------------------------------------------------------
-// KONTROL MINGGUAN (tab "Kontrol_Mingguan") — diisi 1x per minggu, berlaku
-// untuk semua sistem kecuali diberi pengecualian/override khusus sistem
-// tertentu. Kolom: A WeekKey | B System | C NoKontrolMedia | D NoKontrolBakteri
+// KONTROL MINGGUAN (tab "Kontrol_Mingguan") — Default diisi 1x per bulan per
+// FASILITAS (kolom System selalu diisi, tidak pernah dikosongkan untuk
+// "berlaku semua sistem"), dengan pengecualian per minggu kalau perlu beda.
+// Kolom: A WeekKey | B System | C NoKontrolMedia | D NoKontrolBakteri
 // | E KontrolPositif | F KontrolNegatif | G KontrolNegatifLAL | H KontrolPositifLAL
 // | I NoBetLAL | J NoBetCSE | K SensitivitasLAL | L SensitivitasCSE | M UpdatedBy | N UpdatedAt
 // (Kolom G-L cuma relevan/dipakai untuk sistem WFI & Pure Steam — kontrol
 // khusus uji Endotoksin/LAL, terpisah dari kontrol media/bakteri mikrobiologi
-// di kolom C-F yang berlaku untuk SEMUA sistem termasuk PW.)
+// di kolom C-F yang dipakai semua jenis sistem termasuk PW.)
 // ---------------------------------------------------------------------------
 
 // Senin dari minggu yang memuat tanggal (y, m0=bulan 0-indeks, d).
@@ -957,7 +967,7 @@ function getKontrolMingguan_() {
     if (!row[0]) continue;
     records.push({
       weekKey: String(row[0] || "").trim(),
-      system: String(row[1] || "").trim(), // "" = default berlaku semua sistem
+      system: String(row[1] || "").trim(), // fasilitas yang mengisi (Default & pengecualian SELALU per fasilitas)
       noKontrolMedia: row[2] || "",
       noKontrolBakteri: row[3] || "",
       kontrolPositif: row[4] || "",
@@ -975,8 +985,6 @@ function getKontrolMingguan_() {
   return { records: records };
 }
 
-// Cari record yang berlaku untuk (weekKey, systemKey): override sistem itu
-// kalau ada, kalau tidak pakai nilai default (system kosong) minggu itu.
 const KONTROL_MINGGUAN_FIELDS = [
   "noKontrolMedia", "noKontrolBakteri", "kontrolPositif", "kontrolNegatif",
   "kontrolNegatifLAL", "kontrolPositifLAL", "noBetLAL", "noBetCSE", "sensitivitasLAL", "sensitivitasCSE",
@@ -987,16 +995,26 @@ function isBlankKontrolRecord_(rec) {
   return KONTROL_MINGGUAN_FIELDS.every(function (f) { return !rec[f]; });
 }
 
-// Urutan pencarian: pengecualian-minggu+sistem-ini > pengecualian-minggu
-// (semua sistem) > default-bulan (weekKey = "yyyy-MM" saja, system kosong,
-// diisi 1x dan otomatis berlaku ke semua minggu & sistem di bulan itu).
-// Record yang seluruh isiannya kosong dianggap "tidak ada" (dilewati).
+// Nilai Default cukup diisi 1x per BULAN, tapi HANYA berlaku untuk fasilitas
+// (sistem) yang mengisinya sendiri — bukan otomatis ke semua fasilitas.
+// weekKey Default disimpan sebagai "yyyy-MM-W0" (BUKAN "yyyy-MM" polos) —
+// supaya tidak berisiko salah dibaca/dikonversi sebagai tanggal oleh Google
+// Sheets. Pengecualian minggu tertentu memakai "yyyy-MM-Wn" (n mulai 1).
+function isBlankKontrolRecord_(rec) {
+  if (!rec) return true;
+  return KONTROL_MINGGUAN_FIELDS.every(function (f) { return !rec[f]; });
+}
+
+function monthDefaultWeekKey_(monthKey) {
+  return monthKey + "-W0";
+}
+
+// Urutan pencarian: pengecualian-minggu (sistem ini) > default-bulan (sistem
+// ini). Record yang seluruh isiannya kosong dianggap "tidak ada" (dilewati).
 function findKontrolMingguan_(records, weekKey, systemKey, monthKey) {
   const weekSystem = records.find(function (r) { return r.weekKey === weekKey && r.system === systemKey; });
   if (weekSystem && !isBlankKontrolRecord_(weekSystem)) return weekSystem;
-  const weekDefault = records.find(function (r) { return r.weekKey === weekKey && r.system === ""; });
-  if (weekDefault && !isBlankKontrolRecord_(weekDefault)) return weekDefault;
-  const monthDefault = records.find(function (r) { return r.weekKey === monthKey && r.system === ""; });
+  const monthDefault = records.find(function (r) { return r.weekKey === monthDefaultWeekKey_(monthKey) && r.system === systemKey; });
   if (monthDefault && !isBlankKontrolRecord_(monthDefault)) return monthDefault;
   return null;
 }
