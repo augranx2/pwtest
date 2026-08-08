@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "rea
 import { createPortal } from "react-dom";
 import { QRCodeSVG } from "qrcode.react";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  LineChart, Line, ComposedChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceArea, ResponsiveContainer,
 } from "recharts";
 import {
-  ChevronLeft, Plus, Trash2, Printer, Loader2, Sparkles,
+  ChevronLeft, ChevronRight, Plus, Trash2, Printer, Loader2, Sparkles,
   AlertTriangle, CheckCircle2, XCircle, FileQuestion, LayoutGrid,
   Droplet, LogIn, LogOut, User, History, Lock, Calendar as CalendarIcon,
 } from "lucide-react";
@@ -348,11 +348,54 @@ function StatusPill({ level, hasData }) {
   );
 }
 
-/* ========================================================================= GRAFIK TREN PER PARAMETER */
+/* ========================================================================= GRAFIK TREN PER PARAMETER (gaya EM Viable: area gradasi, dot & tooltip berwarna status, legend chip) */
+function statusForChartValue(value, limit) {
+  const isBi = limit.syaratMin !== undefined;
+  if (isBi) {
+    if (value < limit.syaratMin || value > limit.syaratMax) return { label: "Melebihi Syarat", color: "#b91c1c" };
+    if (value < limit.actionMin || value > limit.actionMax) return { label: "Action", color: "#c2410c" };
+    if (value < limit.alertMin || value > limit.alertMax) return { label: "Alert", color: "#b45309" };
+    return { label: "Terkendali", color: "#15803d" };
+  }
+  if (value < limit.alertMax) return { label: "Terkendali", color: "#15803d" };
+  if (value < limit.actionMax) return { label: "Alert", color: "#b45309" };
+  if (value < limit.syaratMax) return { label: "Action", color: "#c2410c" };
+  return { label: "Melebihi Syarat", color: "#b91c1c" };
+}
+
+function ChartDot({ cx, cy, payload, limit }) {
+  if (cx == null || cy == null) return null;
+  const s = statusForChartValue(payload.value, limit);
+  return <circle cx={cx} cy={cy} r={4} fill={s.color} stroke="#fff" strokeWidth={1.5} />;
+}
+
+function ChartTooltip({ active, payload, limit, unit }) {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0].payload;
+  const s = statusForChartValue(p.value, limit);
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
+      <p className="mb-1 max-w-[160px] font-semibold text-slate-600">{p.label}</p>
+      <p className="text-sm font-bold" style={{ color: s.color }}>{displayValue(p.value)}{unit ? ` ${unit}` : ""}</p>
+      <p className="font-medium" style={{ color: s.color }}>{s.label}</p>
+    </div>
+  );
+}
+
+function LegendChip({ color, label }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
+      {label}
+    </span>
+  );
+}
+
 function ParamChart({ entries, paramKey, systemLabel, jenis }) {
   const meta = PARAM_META[paramKey];
   const limit = getLimit(paramKey, jenis);
   if (!limit || limit.qualitative) return null;
+  const isBidirectional = limit.syaratMin !== undefined;
 
   const pointCounts = {};
   entries.forEach((e) => { pointCounts[e.titikSampling] = (pointCounts[e.titikSampling] || 0) + 1; });
@@ -372,7 +415,6 @@ function ParamChart({ entries, paramKey, systemLabel, jenis }) {
     .filter(Boolean);
   if (data.length === 0) return null;
 
-  const isBidirectional = limit.syaratMin !== undefined;
   let domain;
   if (isBidirectional) {
     const lo = Math.min(limit.syaratMin, ...data.map((d) => d.value));
@@ -383,72 +425,80 @@ function ParamChart({ entries, paramKey, systemLabel, jenis }) {
     domain = [0, Math.max(limit.syaratMax, ...data.map((d) => d.value)) * 1.2];
   }
 
-  const highest = data.reduce((a, b) => (b.value > a.value ? b : a), data[0]);
-
-  const legendItems = isBidirectional
-    ? [
-        { label: "Terkendali", color: "#16a34a" },
-        { label: `Alert ${limit.alertMin}–${limit.alertMax}`, color: "#eab308" },
-        { label: `Action ${limit.actionMin}–${limit.actionMax}`, color: "#f97316" },
-        { label: `Syarat ${limit.syaratMin}–${limit.syaratMax}`, color: "#dc2626" },
-      ]
-    : [
-        { label: "Terkendali", color: "#16a34a" },
-        { label: `Alert ${limit.alertMax}`, color: "#eab308" },
-        { label: `Action ${limit.actionMax}`, color: "#f97316" },
-        { label: `Syarat ${limit.syaratMax}`, color: "#dc2626" },
-      ];
+  const peak = data.reduce((a, b) => (b.value > a.value ? b : a), data[0]);
+  const peakStatus = statusForChartValue(peak.value, limit);
+  const gradId = `paramGrad-${jenis}-${paramKey}`.replace(/[^a-zA-Z0-9-]/g, "");
 
   return (
-    <div className="avoid-break overflow-hidden rounded-lg border border-slate-200 bg-white p-3">
-      <div className="mb-1 flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+    <div className="avoid-break overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 border-b border-slate-100 px-4 py-2.5">
         <div>
-          <p className="text-xs font-semibold text-slate-700">{meta.label} — {systemLabel}</p>
+          <p className="text-xs font-semibold text-slate-600">{meta.label} — {systemLabel}</p>
           <p className="text-[11px] text-slate-400">
-            Tertinggi bulan ini: <span className="font-semibold text-slate-600">{displayValue(highest.value)}</span> ({highest.room})
+            Tertinggi bulan ini: <span className="font-semibold" style={{ color: peakStatus.color }}>{displayValue(peak.value)}{meta.unit ? ` ${meta.unit}` : ""}</span> ({peak.room})
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {legendItems.map((it) => (
-            <span key={it.label} className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500">
-              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: it.color }} />
-              {it.label}
-            </span>
-          ))}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <LegendChip color="#15803d" label="Terkendali" />
+          <LegendChip color="#b45309" label={isBidirectional ? `Alert ${limit.alertMin}–${limit.alertMax}` : `Alert ${limit.alertMax}`} />
+          <LegendChip color="#c2410c" label={isBidirectional ? `Action ${limit.actionMin}–${limit.actionMax}` : `Action ${limit.actionMax}`} />
+          <LegendChip color="#b91c1c" label={isBidirectional ? `Syarat ${limit.syaratMin}–${limit.syaratMax}` : `Syarat ${limit.syaratMax}`} />
         </div>
       </div>
-      <ResponsiveContainer width="100%" height={280}>
-        <LineChart data={data} margin={{ top: 26, right: 15, left: 15, bottom: 55 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-          <XAxis dataKey="label" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" interval={0} height={70} />
-          <YAxis domain={domain} tick={{ fontSize: 11 }} width={42} />
-          <Tooltip />
+      <ResponsiveContainer width="100%" height={260}>
+        <ComposedChart data={data} margin={{ top: 10, right: 15, left: 10, bottom: 50 }}>
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#16a34a" stopOpacity={0.25} />
+              <stop offset="100%" stopColor="#16a34a" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
           {isBidirectional ? (
             <>
-              <ReferenceArea y1={limit.alertMin} y2={limit.alertMax} fill="#16a34a" fillOpacity={0.07} strokeWidth={0} />
-              <ReferenceArea y1={domain[0]} y2={limit.alertMin} fill="#dc2626" fillOpacity={0.06} strokeWidth={0} />
-              <ReferenceArea y1={limit.alertMax} y2={domain[1]} fill="#dc2626" fillOpacity={0.06} strokeWidth={0} />
-              <ReferenceLine y={limit.syaratMax} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Syarat", fontSize: 10, fill: "#dc2626", position: "insideTopRight" }} />
-              <ReferenceLine y={limit.actionMax} stroke="#f97316" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Action", fontSize: 10, fill: "#f97316", position: "insideTopRight" }} />
-              <ReferenceLine y={limit.alertMax} stroke="#eab308" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Alert", fontSize: 10, fill: "#eab308", position: "insideTopRight" }} />
-              <ReferenceLine y={limit.alertMin} stroke="#eab308" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Alert", fontSize: 10, fill: "#eab308", position: "insideBottomRight" }} />
-              <ReferenceLine y={limit.actionMin} stroke="#f97316" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Action", fontSize: 10, fill: "#f97316", position: "insideBottomRight" }} />
-              <ReferenceLine y={limit.syaratMin} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Syarat", fontSize: 10, fill: "#dc2626", position: "insideBottomRight" }} />
+              <ReferenceArea y1={domain[0]} y2={limit.syaratMin} fill="#ef4444" fillOpacity={0.06} ifOverflow="hidden" />
+              <ReferenceArea y1={limit.syaratMin} y2={limit.actionMin} fill="#f97316" fillOpacity={0.07} ifOverflow="hidden" />
+              <ReferenceArea y1={limit.actionMin} y2={limit.alertMin} fill="#f59e0b" fillOpacity={0.06} ifOverflow="hidden" />
+              <ReferenceArea y1={limit.alertMin} y2={limit.alertMax} fill="#22c55e" fillOpacity={0.05} ifOverflow="hidden" />
+              <ReferenceArea y1={limit.alertMax} y2={limit.actionMax} fill="#f59e0b" fillOpacity={0.06} ifOverflow="hidden" />
+              <ReferenceArea y1={limit.actionMax} y2={limit.syaratMax} fill="#f97316" fillOpacity={0.07} ifOverflow="hidden" />
+              <ReferenceArea y1={limit.syaratMax} y2={domain[1]} fill="#ef4444" fillOpacity={0.06} ifOverflow="hidden" />
             </>
           ) : (
             <>
-              <ReferenceArea y1={domain[0]} y2={limit.alertMax} fill="#16a34a" fillOpacity={0.07} strokeWidth={0} />
-              <ReferenceArea y1={limit.alertMax} y2={domain[1]} fill="#dc2626" fillOpacity={0.06} strokeWidth={0} />
-              <ReferenceLine y={limit.syaratMax} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Syarat", fontSize: 10, fill: "#dc2626", position: "insideTopRight" }} />
-              <ReferenceLine y={limit.actionMax} stroke="#f97316" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Action", fontSize: 10, fill: "#f97316", position: "insideTopRight" }} />
-              <ReferenceLine y={limit.alertMax} stroke="#eab308" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Alert", fontSize: 10, fill: "#eab308", position: "insideTopRight" }} />
+              <ReferenceArea y1={0} y2={limit.alertMax} fill="#22c55e" fillOpacity={0.05} ifOverflow="hidden" />
+              <ReferenceArea y1={limit.alertMax} y2={limit.actionMax} fill="#f59e0b" fillOpacity={0.06} ifOverflow="hidden" />
+              <ReferenceArea y1={limit.actionMax} y2={limit.syaratMax} fill="#f97316" fillOpacity={0.07} ifOverflow="hidden" />
+              <ReferenceArea y1={limit.syaratMax} y2={domain[1]} fill="#ef4444" fillOpacity={0.06} ifOverflow="hidden" />
             </>
           )}
-          <Line type="monotone" dataKey="value" stroke="#16a34a" strokeWidth={2.5} dot={{ r: 3, fill: "#16a34a" }} label={{ position: "top", fontSize: 10, fill: "#166534" }} />
-        </LineChart>
+          <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} angle={-35} textAnchor="end" interval={0} height={62} axisLine={{ stroke: "#e2e8f0" }} tickLine={false} />
+          <YAxis domain={domain} tick={{ fontSize: 11, fill: "#64748b" }} width={38} axisLine={false} tickLine={false} />
+          <Tooltip content={<ChartTooltip limit={limit} unit={meta.unit} />} />
+          <ReferenceLine y={limit.syaratMax} stroke="#dc2626" strokeWidth={1.25} strokeDasharray="4 3" />
+          <ReferenceLine y={limit.actionMax} stroke="#f97316" strokeWidth={1} strokeDasharray="4 3" />
+          <ReferenceLine y={limit.alertMax} stroke="#eab308" strokeWidth={1} strokeDasharray="4 3" />
+          {isBidirectional && (
+            <>
+              <ReferenceLine y={limit.syaratMin} stroke="#dc2626" strokeWidth={1.25} strokeDasharray="4 3" />
+              <ReferenceLine y={limit.actionMin} stroke="#f97316" strokeWidth={1} strokeDasharray="4 3" />
+              <ReferenceLine y={limit.alertMin} stroke="#eab308" strokeWidth={1} strokeDasharray="4 3" />
+            </>
+          )}
+          <Area type="monotone" dataKey="value" stroke="none" fill={`url(#${gradId})`} isAnimationActive={false} />
+          <Line
+            type="monotone"
+            dataKey="value"
+            stroke="#16a34a"
+            strokeWidth={2.25}
+            dot={<ChartDot limit={limit} />}
+            activeDot={{ r: 6, stroke: "#fff", strokeWidth: 2 }}
+            isAnimationActive={false}
+          />
+        </ComposedChart>
       </ResponsiveContainer>
       {excludedCount > 0 && (
-        <p className="mt-1 text-xs italic text-amber-600">
+        <p className="mx-4 mb-3 text-xs italic text-amber-600">
           * {excludedCount} titik data dengan nilai tidak wajar (di luar skala grafik) tidak ditampilkan di sini — cek nilainya di tabel di atas.
         </p>
       )}
@@ -695,70 +745,58 @@ function Dashboard({ monthKey, setMonthKey, statusIndex, loadingStatus, statusEr
   const tmsCount = SYSTEMS.filter((s) => (statusIndex[s.key]?.level || 0) >= 4).length;
   return (
     <div>
-      <div className="bg-gradient-to-r from-teal-950 via-teal-900 to-teal-800">
-        <div className="mx-auto max-w-5xl px-6 py-6">
-          <p className="text-xs font-semibold uppercase tracking-wider text-teal-300">PT. Rama Emerald Multi Sukses — QA</p>
-          <h1 className="text-2xl font-bold text-white">Dashboard SPA — Sistem Pengolahan Air</h1>
-          <p className="mt-1 text-sm text-teal-100">Rekap pengkajian trend Purified Water, Water For Injection, dan Pure Steam</p>
+      <div className="relative overflow-hidden bg-gradient-to-br from-teal-950 via-teal-900 to-teal-800">
+        <div className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-teal-400/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-16 left-1/3 h-48 w-48 rounded-full bg-emerald-400/10 blur-3xl" />
+        <div className="relative mx-auto flex max-w-5xl flex-wrap items-end justify-between gap-4 px-6 py-7">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-teal-300">PT. Rama Emerald Multi Sukses — QA</p>
+            <h1 className="text-2xl font-bold text-white">Dashboard SPA — Sistem Pengolahan Air</h1>
+            <p className="mt-1 text-sm text-teal-100">Rekap pengkajian trend Purified Water, Water For Injection, dan Pure Steam</p>
+          </div>
+          <label className="no-print inline-flex items-center gap-2 rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-sm text-white backdrop-blur-sm">
+            <CalendarIcon size={15} className="text-teal-200" />
+            <input type="month" value={monthKey} onChange={(ev) => setMonthKey(ev.target.value)} onClick={(ev) => ev.currentTarget.showPicker?.()}
+              className="border-none bg-transparent text-sm text-white outline-none [color-scheme:dark]" />
+          </label>
         </div>
       </div>
       <div className="mx-auto max-w-5xl p-6">
-        <div className="mb-6 flex justify-end">
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-500">Periode</label>
-            <input type="month" value={monthKey} onChange={(ev) => setMonthKey(ev.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-          </div>
-        </div>
 
         {statusError && (
           <p className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{statusError}</p>
         )}
 
         <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><LayoutGrid size={17} /></span>
-            <p className="text-2xl font-bold text-slate-800">{SYSTEMS.length}</p>
-            <p className="text-xs text-slate-400">Total Sistem</p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><CheckCircle2 size={17} /></span>
-            <p className="text-2xl font-bold text-slate-800">{SYSTEMS.filter((s) => statusIndex[s.key]?.hasData && (statusIndex[s.key]?.level || 0) < 3).length}</p>
-            <p className="text-xs text-slate-400">Terkendali</p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-orange-50 text-orange-500"><AlertTriangle size={17} /></span>
-            <p className="text-2xl font-bold text-slate-800">{perluCount}</p>
-            <p className="text-xs text-slate-400">Perlu Perhatian</p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-red-600"><XCircle size={17} /></span>
-            <p className="text-2xl font-bold text-slate-800">{tmsCount}</p>
-            <p className="text-xs text-slate-400">Melebihi Syarat</p>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-500"><FileQuestion size={17} /></span>
-            <p className="text-2xl font-bold text-slate-800">{SYSTEMS.filter((s) => !statusIndex[s.key]?.hasData).length}</p>
-            <p className="text-xs text-slate-400">Belum Ada Data</p>
-          </div>
+          <StatCard icon={<LayoutGrid size={17} />} iconColor="#0f766e" tint="#ccfbf1" border="#99f6e4" value={SYSTEMS.length} label="Total Sistem" />
+          <StatCard icon={<CheckCircle2 size={17} />} iconColor="#15803d" tint="#dcfce7" border="#bbf7d0" value={SYSTEMS.filter((s) => statusIndex[s.key]?.hasData && (statusIndex[s.key]?.level || 0) < 3).length} label="Terkendali" />
+          <StatCard icon={<AlertTriangle size={17} />} iconColor="#c2410c" tint="#ffedd5" border="#fed7aa" value={perluCount} label="Perlu Perhatian" />
+          <StatCard icon={<XCircle size={17} />} iconColor="#b91c1c" tint="#fee2e2" border="#fecaca" value={tmsCount} label="Melebihi Syarat" />
+          <StatCard icon={<FileQuestion size={17} />} iconColor="#475569" tint="#f1f5f9" border="#e2e8f0" value={SYSTEMS.filter((s) => !statusIndex[s.key]?.hasData).length} label="Belum Ada Data" />
         </div>
 
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Sistem — {monthLabel(monthKey)}</p>
         <div className="space-y-2.5">
           {SYSTEMS.map((s) => {
             const st = statusIndex[s.key];
-            const level = st?.level || 0;
-            const borderColor = !st?.hasData ? "#cbd5e1" : level >= 4 ? "#dc2626" : level === 3 ? "#f97316" : "#16a34a";
+            const level = st?.hasData ? (st?.level || 0) : 0;
+            const accent = STATUS_ACCENT[level];
+            const tint = STATUS_TINT[level];
             return (
-              <button key={s.key} onClick={() => onOpen(s.key)} style={{ borderLeft: `4px solid ${borderColor}` }}
-                className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-teal-300 hover:shadow-sm">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><Droplet size={19} /></span>
+              <button key={s.key} onClick={() => onOpen(s.key)}
+                className="group flex w-full items-center justify-between overflow-hidden rounded-xl border border-slate-200 bg-white pr-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md">
+                <span className="self-stretch w-1.5" style={{ background: accent }} />
+                <div className="flex flex-1 items-center gap-3 py-3.5 pl-3.5">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" style={{ background: tint.bg, color: tint.fg }}><Droplet size={19} /></span>
                   <div>
                     <p className="font-semibold text-slate-800">{s.label}</p>
                     <p className="text-xs text-slate-400">{loadingStatus ? "Memuat..." : st?.hasData ? "Ada data periode ini" : "Belum ada data periode ini"}</p>
                   </div>
                 </div>
-                {loadingStatus ? <Loader2 className="animate-spin text-slate-300" size={18} /> : <StatusPill level={st?.level || 0} hasData={!!st?.hasData} />}
+                <div className="flex shrink-0 items-center gap-2">
+                  {loadingStatus ? <Loader2 className="animate-spin text-slate-300" size={18} /> : <StatusPill level={st?.level || 0} hasData={!!st?.hasData} />}
+                  <ChevronRight size={16} className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-teal-400" />
+                </div>
               </button>
             );
           })}
@@ -767,6 +805,31 @@ function Dashboard({ monthKey, setMonthKey, statusIndex, loadingStatus, statusEr
     </div>
   );
 }
+
+function StatCard({ icon, iconColor, tint, border, value, label }) {
+  return (
+    <div
+      className="rounded-xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+      style={{ background: `linear-gradient(155deg, ${tint} 0%, #ffffff 72%)`, borderColor: border }}
+    >
+      <span className="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white shadow-sm" style={{ color: iconColor }}>
+        {icon}
+      </span>
+      <p className="text-2xl font-bold text-slate-800">{value}</p>
+      <p className="text-xs font-medium text-slate-600">{label}</p>
+    </div>
+  );
+}
+
+const STATUS_TINT = {
+  0: { bg: "#f1f5f9", fg: "#64748b" },
+  1: { bg: "#ccfbf1", fg: "#0f766e" },
+  2: { bg: "#ccfbf1", fg: "#0f766e" },
+  3: { bg: "#ffedd5", fg: "#c2410c" },
+  4: { bg: "#fee2e2", fg: "#b91c1c" },
+};
+
+const STATUS_ACCENT = { 0: "#cbd5e1", 1: "#14b8a6", 2: "#14b8a6", 3: "#f97316", 4: "#ef4444" };
 
 /* ========================================================================= REPORT HASIL PEMERIKSAAN (formulir QC fisik yang didigitalkan) */
 function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token, onBack, kontrolRecords = [], masterPoints = [] }) {
