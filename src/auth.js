@@ -3,7 +3,7 @@ import { login as apiLogin, logout as apiLogout, whoami as apiWhoami } from "./a
 
 const STORAGE_KEY = "spa_dashboard_session";
 
-const ROLE_LEVEL = { Staff: 1, Supervisor: 2, Manager: 3, "Assistant Manager": 3, Administrator: 4 };
+const ROLE_LEVEL = { Tamu: 1, Staff: 2, Supervisor: 3, Manager: 4, "Assistant Manager": 4, Administrator: 5 };
 
 function readStored() {
   try {

@@ -162,7 +162,7 @@ const NARRATIVE_SHEET = "Pengkajian_Narasi";
 const REPORT_HASIL_SHEET = "Report_Hasil";
 const KONTROL_MINGGUAN_SHEET = "Kontrol_Mingguan";
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000; // 8 jam
-const ROLE_LEVEL = { Staff: 1, Supervisor: 2, Manager: 3, "Assistant Manager": 3, Administrator: 4 };
+const ROLE_LEVEL = { Tamu: 1, Staff: 2, Supervisor: 3, Manager: 4, "Assistant Manager": 4, Administrator: 5 };
 
 // ---------------------------------------------------------------------------
 // ENTRY POINTS
@@ -651,6 +651,8 @@ function saveEntriesAuthed_(session, systemKey, month, entries) {
   }
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
+  const lockError = recordsLockError_(session, systemKey, month);
+  if (lockError) return { error: lockError };
 
   const before = getEntries_(systemKey, month).entries || [];
   const submittedIds = {};
@@ -749,6 +751,11 @@ function saveReportAuthed_(session, systemKey, month, narrative) {
   }
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
+  const lockError = recordsLockError_(session, systemKey, month, { skipQcCheck: true });
+  if (lockError) return { error: lockError };
+  if (!(session && session.role === "Administrator") && !isQcFinalApproved_(systemKey, month)) {
+    return { error: "Formulir QC periode ini belum final di-acc Supervisor/Manager QC. Pengkajian baru bisa disusun setelah itu selesai." };
+  }
   const existing = getReport_(systemKey, month);
   const signoff = (existing && existing.signoff) || emptySignoffServer_();
   const result = saveReport_(systemKey, month, narrative, signoff);
@@ -765,6 +772,11 @@ function approveDikajiAuthed_(session, systemKey, month) {
   }
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
+  const lockError = recordsLockError_(session, systemKey, month, { skipQcCheck: true });
+  if (lockError) return { error: lockError };
+  if (!(session && session.role === "Administrator") && !isQcFinalApproved_(systemKey, month)) {
+    return { error: "Formulir QC periode ini belum final di-acc Supervisor/Manager QC." };
+  }
   const existing = getReport_(systemKey, month);
   if (!existing.found) return { error: "Belum ada draf Pengkajian SPA untuk bulan ini, isi dulu narasinya." };
   const signoff = existing.signoff || emptySignoffServer_();
@@ -783,6 +795,11 @@ function approveMengetahuiAuthed_(session, systemKey, month) {
   }
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
+  const lockError = recordsLockError_(session, systemKey, month, { skipQcCheck: true });
+  if (lockError) return { error: lockError };
+  if (!(session && session.role === "Administrator") && !isQcFinalApproved_(systemKey, month)) {
+    return { error: "Formulir QC periode ini belum final di-acc Supervisor/Manager QC." };
+  }
   const existing = getReport_(systemKey, month);
   if (!existing.found) return { error: "Belum ada draf Pengkajian SPA untuk bulan ini." };
   if (!existing.signoff || !existing.signoff.dinilai || !existing.signoff.dinilai.nama) {
@@ -827,6 +844,35 @@ function findReportHasilRow_(systemKey, month) {
   return { sheet: sheet, rowIndex: -1, row: null };
 }
 
+// Formulir QC (Report_Hasil) sudah final di-acc Supervisor/Manager QC?
+// (kolom F/index 5 = DiperiksaNama)
+function isQcFinalApproved_(systemKey, month) {
+  const found = findReportHasilRow_(systemKey, month);
+  if (found.rowIndex === -1) return false;
+  return !!(found.row && found.row[5]);
+}
+
+// Pengkajian (narasi QA) sudah final di-acc Manager QA ("Mengetahui")? Kalau
+// sudah, seluruh data terkait (entri, kontrol mingguan, formulir QC, narasi)
+// jadi arsip terkunci — hanya Administrator yang masih boleh mengubah/menghapus.
+function isPengkajianFinalized_(systemKey, month) {
+  const rep = getReport_(systemKey, month);
+  return !!(rep && rep.found && rep.signoff && rep.signoff.diperiksa && rep.signoff.diperiksa.nama);
+}
+
+// Gabungan kedua kunci di atas, dipakai di semua fungsi tulis. Administrator
+// selalu dikecualikan (bisa ubah/hapus kapan saja).
+function recordsLockError_(session, systemKey, month, opts) {
+  if (session && session.role === "Administrator") return null;
+  if (isPengkajianFinalized_(systemKey, month)) {
+    return "Pengkajian periode ini sudah final disetujui — data terkunci. Hanya Administrator yang bisa mengubah/menghapus.";
+  }
+  if ((!opts || !opts.skipQcCheck) && isQcFinalApproved_(systemKey, month)) {
+    return "Formulir QC periode ini sudah final di-acc Supervisor/Manager QC — data terkunci. Hanya Administrator yang bisa mengubah/menghapus.";
+  }
+  return null;
+}
+
 function getReportHasil_(systemKey, month) {
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
@@ -849,6 +895,9 @@ function saveReportHasilAuthed_(session, systemKey, month) {
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
   if (!month) return { error: "Periode (bulan) wajib diisi." };
+  if (!(session && session.role === "Administrator") && isPengkajianFinalized_(systemKey, month)) {
+    return { error: "Pengkajian periode ini sudah final disetujui — Formulir QC terkunci. Hanya Administrator yang bisa mengubah." };
+  }
 
   const found = findReportHasilRow_(systemKey, month);
   const now = new Date();
@@ -889,6 +938,9 @@ function approveReportHasilAuthed_(session, systemKey, month) {
   }
   const cfg = SYSTEMS[systemKey];
   if (!cfg) return { error: "Sistem tidak dikenal: " + systemKey };
+  if (!(session && session.role === "Administrator") && isPengkajianFinalized_(systemKey, month)) {
+    return { error: "Pengkajian periode ini sudah final disetujui — Formulir QC terkunci. Hanya Administrator yang bisa mengubah." };
+  }
   const found = findReportHasilRow_(systemKey, month);
   if (found.rowIndex === -1) return { error: "Belum ada draf Report Hasil Pemeriksaan untuk periode ini." };
 
@@ -1027,6 +1079,19 @@ function saveKontrolMingguanAuthed_(session, records) {
   const isQAInput = requireRole_(session, "Supervisor", "QA");
   if (!isQCInput && !isQAInput) {
     return { error: "Hanya Staff/Supervisor/Manager QC, atau Supervisor/Manager QA, yang boleh mengisi Kontrol Mingguan." };
+  }
+  if (!(session && session.role === "Administrator")) {
+    for (let k = 0; k < (records || []).length; k++) {
+      const rec = records[k];
+      const wk = String(rec.weekKey || "").trim();
+      const recSystem = String(rec.system || "").trim();
+      const m = wk.match(/^(\d{4}-\d{2})/);
+      const recMonth = m ? m[1] : "";
+      if (recMonth && recSystem) {
+        const lockError = recordsLockError_(session, recSystem, recMonth);
+        if (lockError) return { error: lockError };
+      }
+    }
   }
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(KONTROL_MINGGUAN_SHEET);
   if (!sheet) return { error: "Tab tidak ditemukan: " + KONTROL_MINGGUAN_SHEET };

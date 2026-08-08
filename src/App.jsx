@@ -3,11 +3,12 @@ import { createPortal } from "react-dom";
 import { QRCodeSVG } from "qrcode.react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ResponsiveContainer,
+  ReferenceLine, ReferenceArea, ResponsiveContainer,
 } from "recharts";
 import {
   ChevronLeft, Plus, Trash2, Printer, Loader2, Sparkles,
-  AlertTriangle, CheckCircle2, Droplet, LogIn, LogOut, User, History, Lock, Calendar as CalendarIcon,
+  AlertTriangle, CheckCircle2, XCircle, FileQuestion, LayoutGrid,
+  Droplet, LogIn, LogOut, User, History, Lock, Calendar as CalendarIcon,
 } from "lucide-react";
 import {
   fetchMaster, fetchEntries, saveEntries as apiSaveEntries,
@@ -271,7 +272,7 @@ function DateInputID({ value, onChange, disabled, className }) {
                   type="button"
                   key={i}
                   onClick={() => pickDay(d)}
-                  className={`rounded py-1 hover:bg-blue-50 ${isSelected ? "bg-blue-600 text-white hover:bg-blue-600" : "text-slate-600"}`}
+                  className={`rounded py-1 hover:bg-teal-50 ${isSelected ? "bg-teal-600 text-white hover:bg-teal-600" : "text-slate-600"}`}
                 >
                   {d}
                 </button>
@@ -366,7 +367,7 @@ function ParamChart({ entries, paramKey, systemLabel, jenis }) {
       if (v === null) return null;
       if (limit.syaratMin === undefined && v > outlierCutoff) { excludedCount += 1; return null; }
       const label = pointCounts[e.titikSampling] > 1 ? `${e.titikSampling} (${shortDate(e.tanggal)})` : e.titikSampling;
-      return { label, value: v };
+      return { label, value: v, room: e.namaRuangan || e.titikSampling };
     })
     .filter(Boolean);
   if (data.length === 0) return null;
@@ -382,9 +383,40 @@ function ParamChart({ entries, paramKey, systemLabel, jenis }) {
     domain = [0, Math.max(limit.syaratMax, ...data.map((d) => d.value)) * 1.2];
   }
 
+  const highest = data.reduce((a, b) => (b.value > a.value ? b : a), data[0]);
+
+  const legendItems = isBidirectional
+    ? [
+        { label: "Terkendali", color: "#16a34a" },
+        { label: `Alert ${limit.alertMin}–${limit.alertMax}`, color: "#eab308" },
+        { label: `Action ${limit.actionMin}–${limit.actionMax}`, color: "#f97316" },
+        { label: `Syarat ${limit.syaratMin}–${limit.syaratMax}`, color: "#dc2626" },
+      ]
+    : [
+        { label: "Terkendali", color: "#16a34a" },
+        { label: `Alert ${limit.alertMax}`, color: "#eab308" },
+        { label: `Action ${limit.actionMax}`, color: "#f97316" },
+        { label: `Syarat ${limit.syaratMax}`, color: "#dc2626" },
+      ];
+
   return (
     <div className="avoid-break overflow-hidden rounded-lg border border-slate-200 bg-white p-3">
-      <p className="mb-2 text-xs font-semibold text-slate-500">{meta.label} — {systemLabel}</p>
+      <div className="mb-1 flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+        <div>
+          <p className="text-xs font-semibold text-slate-700">{meta.label} — {systemLabel}</p>
+          <p className="text-[11px] text-slate-400">
+            Tertinggi bulan ini: <span className="font-semibold text-slate-600">{displayValue(highest.value)}</span> ({highest.room})
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {legendItems.map((it) => (
+            <span key={it.label} className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500">
+              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: it.color }} />
+              {it.label}
+            </span>
+          ))}
+        </div>
+      </div>
       <ResponsiveContainer width="100%" height={280}>
         <LineChart data={data} margin={{ top: 26, right: 15, left: 15, bottom: 55 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -393,6 +425,9 @@ function ParamChart({ entries, paramKey, systemLabel, jenis }) {
           <Tooltip />
           {isBidirectional ? (
             <>
+              <ReferenceArea y1={limit.alertMin} y2={limit.alertMax} fill="#16a34a" fillOpacity={0.07} strokeWidth={0} />
+              <ReferenceArea y1={domain[0]} y2={limit.alertMin} fill="#dc2626" fillOpacity={0.06} strokeWidth={0} />
+              <ReferenceArea y1={limit.alertMax} y2={domain[1]} fill="#dc2626" fillOpacity={0.06} strokeWidth={0} />
               <ReferenceLine y={limit.syaratMax} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Syarat", fontSize: 10, fill: "#dc2626", position: "insideTopRight" }} />
               <ReferenceLine y={limit.actionMax} stroke="#f97316" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Action", fontSize: 10, fill: "#f97316", position: "insideTopRight" }} />
               <ReferenceLine y={limit.alertMax} stroke="#eab308" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Alert", fontSize: 10, fill: "#eab308", position: "insideTopRight" }} />
@@ -402,6 +437,8 @@ function ParamChart({ entries, paramKey, systemLabel, jenis }) {
             </>
           ) : (
             <>
+              <ReferenceArea y1={domain[0]} y2={limit.alertMax} fill="#16a34a" fillOpacity={0.07} strokeWidth={0} />
+              <ReferenceArea y1={limit.alertMax} y2={domain[1]} fill="#dc2626" fillOpacity={0.06} strokeWidth={0} />
               <ReferenceLine y={limit.syaratMax} stroke="#dc2626" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Syarat", fontSize: 10, fill: "#dc2626", position: "insideTopRight" }} />
               <ReferenceLine y={limit.actionMax} stroke="#f97316" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Action", fontSize: 10, fill: "#f97316", position: "insideTopRight" }} />
               <ReferenceLine y={limit.alertMax} stroke="#eab308" strokeWidth={1.5} strokeDasharray="5 4" label={{ value: "Alert", fontSize: 10, fill: "#eab308", position: "insideTopRight" }} />
@@ -415,6 +452,60 @@ function ParamChart({ entries, paramKey, systemLabel, jenis }) {
           * {excludedCount} titik data dengan nilai tidak wajar (di luar skala grafik) tidak ditampilkan di sini — cek nilainya di tabel di atas.
         </p>
       )}
+    </div>
+  );
+}
+
+/* ========================================================================= TABEL NILAI PER PARAMETER (mirip tampilan "per kelas" EM Viable) */
+const STATUS_BADGE_CLASS = {
+  0: "bg-slate-100 text-slate-500",
+  1: "bg-emerald-50 text-emerald-700",
+  2: "bg-amber-50 text-amber-700",
+  3: "bg-orange-50 text-orange-700",
+  4: "bg-red-50 text-red-700",
+};
+
+function ParamValueTable({ entries, paramKey, jenis }) {
+  const meta = PARAM_META[paramKey];
+  const qualitative = getLimit(paramKey, jenis).qualitative;
+  const rows = entries.filter((e) => e[paramKey] !== null && e[paramKey] !== undefined && e[paramKey] !== "");
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="avoid-break overflow-hidden rounded-lg border border-slate-200">
+      <div className="flex items-center justify-between bg-gradient-to-r from-teal-950 via-teal-900 to-teal-800 px-4 py-2.5">
+        <h4 className="text-sm font-bold uppercase tracking-wide text-white">{meta.label}</h4>
+        <span className="text-xs font-medium text-teal-200">{rows.length} titik data</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <th className="whitespace-nowrap px-4 py-2">Titik Sampling</th>
+              <th className="whitespace-nowrap px-4 py-2">Nama Ruangan</th>
+              <th className="whitespace-nowrap px-4 py-2">Tanggal</th>
+              <th className="whitespace-nowrap px-4 py-2">Nilai</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((e) => {
+              const st = statusFor(e[paramKey], paramKey, jenis);
+              return (
+                <tr key={e.id} className="border-b border-slate-100 last:border-0">
+                  <td className="whitespace-nowrap px-4 py-2.5 font-medium text-slate-700">{e.titikSampling || "-"}</td>
+                  <td className="px-4 py-2.5 text-slate-500">{e.namaRuangan || "-"}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-slate-500">{isoToID(e.tanggal)}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={`inline-flex rounded-md px-2.5 py-1 text-xs font-semibold ${STATUS_BADGE_CLASS[st.level] || STATUS_BADGE_CLASS[0]}`}>
+                      {displayValue(e[paramKey])}{!qualitative && meta.unit ? ` ${meta.unit}` : ""}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -506,7 +597,7 @@ function EntryEditor({ system, masterPoints, entries, setEntries, onSave, saving
             <button onClick={addRow} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
               <Plus size={14} /> Tambah Baris
             </button>
-            <button onClick={onSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800 disabled:opacity-60">
+            <button onClick={onSave} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-60">
               {saving ? <Loader2 size={14} className="animate-spin" /> : null} Simpan Data Periode Ini
             </button>
           </div>
@@ -604,11 +695,11 @@ function Dashboard({ monthKey, setMonthKey, statusIndex, loadingStatus, statusEr
   const tmsCount = SYSTEMS.filter((s) => (statusIndex[s.key]?.level || 0) >= 4).length;
   return (
     <div>
-      <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-blue-900">
+      <div className="bg-gradient-to-r from-teal-950 via-teal-900 to-teal-800">
         <div className="mx-auto max-w-5xl px-6 py-6">
-          <p className="text-xs font-semibold uppercase tracking-wider text-blue-300">PT. Rama Emerald Multi Sukses — QA</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-teal-300">PT. Rama Emerald Multi Sukses — QA</p>
           <h1 className="text-2xl font-bold text-white">Dashboard SPA — Sistem Pengolahan Air</h1>
-          <p className="mt-1 text-sm text-blue-100">Rekap pengkajian trend Purified Water, Water For Injection, dan Pure Steam</p>
+          <p className="mt-1 text-sm text-teal-100">Rekap pengkajian trend Purified Water, Water For Injection, dan Pure Steam</p>
         </div>
       </div>
       <div className="mx-auto max-w-5xl p-6">
@@ -624,25 +715,30 @@ function Dashboard({ monthKey, setMonthKey, statusIndex, loadingStatus, statusEr
         )}
 
         <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
-          <div className="rounded-xl bg-blue-800 p-4 text-white">
-            <p className="text-xs font-medium text-blue-100">Total Sistem</p>
-            <p className="text-2xl font-bold">{SYSTEMS.length}</p>
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><LayoutGrid size={17} /></span>
+            <p className="text-2xl font-bold text-slate-800">{SYSTEMS.length}</p>
+            <p className="text-xs text-slate-400">Total Sistem</p>
           </div>
-          <div className="rounded-xl bg-emerald-700 p-4 text-white">
-            <p className="text-xs font-medium text-emerald-100">Terkendali</p>
-            <p className="text-2xl font-bold">{SYSTEMS.filter((s) => statusIndex[s.key]?.hasData && (statusIndex[s.key]?.level || 0) < 3).length}</p>
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600"><CheckCircle2 size={17} /></span>
+            <p className="text-2xl font-bold text-slate-800">{SYSTEMS.filter((s) => statusIndex[s.key]?.hasData && (statusIndex[s.key]?.level || 0) < 3).length}</p>
+            <p className="text-xs text-slate-400">Terkendali</p>
           </div>
-          <div className="rounded-xl bg-orange-600 p-4 text-white">
-            <p className="text-xs font-medium text-orange-100">Terkendali (Perlu Perhatian)</p>
-            <p className="text-2xl font-bold">{perluCount}</p>
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-orange-50 text-orange-500"><AlertTriangle size={17} /></span>
+            <p className="text-2xl font-bold text-slate-800">{perluCount}</p>
+            <p className="text-xs text-slate-400">Perlu Perhatian</p>
           </div>
-          <div className="rounded-xl bg-red-700 p-4 text-white">
-            <p className="text-xs font-medium text-red-100">Melebihi Syarat</p>
-            <p className="text-2xl font-bold">{tmsCount}</p>
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-red-600"><XCircle size={17} /></span>
+            <p className="text-2xl font-bold text-slate-800">{tmsCount}</p>
+            <p className="text-xs text-slate-400">Melebihi Syarat</p>
           </div>
-          <div className="rounded-xl bg-slate-600 p-4 text-white">
-            <p className="text-xs font-medium text-slate-200">Belum Ada Data</p>
-            <p className="text-2xl font-bold">{SYSTEMS.filter((s) => !statusIndex[s.key]?.hasData).length}</p>
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-500"><FileQuestion size={17} /></span>
+            <p className="text-2xl font-bold text-slate-800">{SYSTEMS.filter((s) => !statusIndex[s.key]?.hasData).length}</p>
+            <p className="text-xs text-slate-400">Belum Ada Data</p>
           </div>
         </div>
 
@@ -650,11 +746,13 @@ function Dashboard({ monthKey, setMonthKey, statusIndex, loadingStatus, statusEr
         <div className="space-y-2.5">
           {SYSTEMS.map((s) => {
             const st = statusIndex[s.key];
+            const level = st?.level || 0;
+            const borderColor = !st?.hasData ? "#cbd5e1" : level >= 4 ? "#dc2626" : level === 3 ? "#f97316" : "#16a34a";
             return (
-              <button key={s.key} onClick={() => onOpen(s.key)}
-                className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:shadow-sm">
+              <button key={s.key} onClick={() => onOpen(s.key)} style={{ borderLeft: `4px solid ${borderColor}` }}
+                className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-teal-300 hover:shadow-sm">
                 <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-700"><Droplet size={19} /></span>
+                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50 text-teal-700"><Droplet size={19} /></span>
                   <div>
                     <p className="font-semibold text-slate-800">{s.label}</p>
                     <p className="text-xs text-slate-400">{loadingStatus ? "Memuat..." : st?.hasData ? "Ada data periode ini" : "Belum ada data periode ini"}</p>
@@ -781,8 +879,24 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
   ];
   const totalWeight = colWeights.reduce((s, w) => s + w, 0);
 
+  if (!session) {
+    return (
+      <div className="mx-auto max-w-md p-6 pt-20 text-center">
+        <Lock size={28} className="mx-auto mb-3 text-slate-300" />
+        <h2 className="mb-1 text-base font-bold text-slate-700">Perlu Login</h2>
+        <p className="mb-4 text-sm text-slate-500">Formulir Pemeriksaan QC hanya bisa dilihat oleh akun yang sudah login.</p>
+        <button onClick={onBack} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
+          <ChevronLeft size={16} /> Kembali ke Pengkajian SPA
+        </button>
+      </div>
+    );
+  }
+
+  const canPrint = hasAccess(session, "Staff");
+
   return (
-    <div className="mx-auto max-w-6xl p-6 print:max-w-none print:p-0">
+    <div className="mx-auto max-w-6xl p-6 print:max-w-none print:p-0" data-print-blocked={!canPrint}>
+      <div className="print-blocked-notice">Akses print/download PDF dibatasi untuk akun Staff/Supervisor/Manager ke atas. Silakan login dengan akun yang sesuai.</div>
       <style>{`
         @media print {
           @page { size: A4 landscape; margin: 1cm; }
@@ -800,9 +914,11 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
         <button onClick={onBack} className="inline-flex items-center gap-1 text-sm font-medium text-slate-500 hover:text-slate-700">
           <ChevronLeft size={16} /> Kembali ke Pengkajian SPA
         </button>
-        <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-900">
-          <Printer size={15} /> Cetak / Download PDF
-        </button>
+        {canPrint && (
+          <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-900">
+            <Printer size={15} /> Cetak / Download PDF
+          </button>
+        )}
       </div>
 
       {errorMsg && <p className="no-print mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{errorMsg}</p>}
@@ -812,24 +928,27 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
       ) : weeks.length === 0 ? (
         <p className="py-10 text-center text-sm text-slate-400">Belum ada data pengujian untuk periode ini. Isi dulu di halaman Input Data.</p>
       ) : (
-        <div className="rounded-xl border border-slate-300 bg-white p-6 print-card">
-          <div className="mb-4 flex items-start justify-between border-b border-slate-300 pb-4">
-            <div className="flex items-center gap-3">
-              <img src="/logo-rama.png" alt="Logo PT. Rama Emerald Multi Sukses" className="h-14 w-14 shrink-0 object-contain" />
-              <div>
-                <p className="text-xs font-semibold text-slate-500">PT. Rama Emerald Multi Sukses</p>
-                <h2 className="text-lg font-bold uppercase text-slate-800">Formulir Pemeriksaan {system.jenis}</h2>
+        <div className="overflow-hidden rounded-xl border border-slate-300 print-card">
+          <div className="bg-gradient-to-r from-teal-950 via-teal-900 to-teal-800 px-5 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <img src="/logo-rama.png" alt="Logo PT. Rama Emerald Multi Sukses" className="h-12 w-12 shrink-0 object-contain brightness-0 invert" />
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-teal-300">PT. Rama Emerald Multi Sukses</p>
+                  <h2 className="text-lg font-bold uppercase text-white">Formulir Pemeriksaan {system.jenis}</h2>
+                </div>
               </div>
+              {docNo && (
+                <div className="shrink-0 text-right text-[11px] leading-tight text-teal-100">
+                  <p><span className="text-teal-300">No. </span><span className="font-medium text-white">: {docNo.no}</span></p>
+                  <p><span className="text-teal-300">Tgl Berlaku </span><span className="font-medium text-white">: {docNo.tglBerlaku}</span></p>
+                  <p><span className="text-teal-300">Menggantikan No. </span><span className="font-medium text-white">: {docNo.menggantikanNo}</span></p>
+                  <p><span className="text-teal-300">Tgl Berlaku </span><span className="font-medium text-white">: {docNo.tglBerlakuLama}</span></p>
+                </div>
+              )}
             </div>
-            {docNo && (
-              <div className="shrink-0 text-right text-[11px] leading-tight text-slate-500">
-                <p><span className="text-slate-400">No. </span><span className="font-medium text-slate-700">: {docNo.no}</span></p>
-                <p><span className="text-slate-400">Tgl Berlaku </span><span className="font-medium text-slate-700">: {docNo.tglBerlaku}</span></p>
-                <p><span className="text-slate-400">Menggantikan No. </span><span className="font-medium text-slate-700">: {docNo.menggantikanNo}</span></p>
-                <p><span className="text-slate-400">Tgl Berlaku </span><span className="font-medium text-slate-700">: {docNo.tglBerlakuLama}</span></p>
-              </div>
-            )}
           </div>
+          <div className="bg-white p-6">
 
           <div className="mb-4 grid grid-cols-1 gap-1 text-sm sm:grid-cols-2">
             <p><span className="text-slate-500">Sistem</span> : <span className="font-medium">{system.label}</span></p>
@@ -967,6 +1086,7 @@ function ReportHasilPanel({ systemKey, entriesForMonth, monthKey, session, token
                 </div>
               ))}
             </div>
+          </div>
           </div>
         </div>
       )}
@@ -1183,7 +1303,7 @@ function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, ca
         </div>
         {canInput && (
           <button onClick={handleSaveAll} disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+            className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50">
             {saving ? <Loader2 size={14} className="animate-spin" /> : null} Simpan Kontrol Mingguan
           </button>
         )}
@@ -1211,7 +1331,7 @@ function KontrolMingguanPanel({ systemKey, jenis, monthKey, entries, records, ca
             </tr>
           </thead>
           <tbody>
-            <tr className="border-b border-slate-100 bg-blue-50/40">
+            <tr className="border-b border-slate-100 bg-teal-50/40">
               <td className="px-3 py-2 font-medium">Default — seluruh bulan ini<br /><span className="font-normal text-xs text-slate-400">(khusus fasilitas ini)</span></td>
               {renderFieldInputs(defaultRow, updateDefault)}
               <td className="px-3 py-2"></td>
@@ -1257,13 +1377,10 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
   const system = SYSTEMS.find((s) => s.key === systemKey);
   const params = PARAMS_BY_JENIS[system.jenis] || [];
 
-  const canInputQC = hasAccess(session, "Staff", "QC") || hasAccess(session, "Supervisor", "QA");
-  const canDeleteQC = hasAccess(session, "Supervisor", "QC") || hasAccess(session, "Supervisor", "QA");
-  const canEditQA = hasAccess(session, "Supervisor", "QA");
-  const canApproveFinal = hasAccess(session, "Manager", "QA");
   const isAdmin = session?.role === "Administrator";
-  const isQA = isAdmin || session?.departemen === "QA";
-  const isQC = isAdmin || session?.departemen === "QC";
+  const isTamu = session?.role === "Tamu";
+  const isQA = isAdmin || (!isTamu && session?.departemen === "QA");
+  const isQC = isAdmin || (!isTamu && session?.departemen === "QC");
   const [mode, setMode] = useState("pengkajian"); // 'pengkajian' | 'reportHasil'
 
   const [loading, setLoading] = useState(true);
@@ -1280,6 +1397,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
   const [kontrolRecords, setKontrolRecords] = useState([]);
   const [kontrolSaving, setKontrolSaving] = useState(false);
   const [kontrolError, setKontrolError] = useState("");
+  const [reportHasilMeta, setReportHasilMeta] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1287,16 +1405,18 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       setLoading(true);
       setLoadError("");
       try {
-        const [ent, rep, pts, kontrol] = await Promise.all([
+        const [ent, rep, pts, kontrol, rh] = await Promise.all([
           fetchEntries(systemKey, monthKey),
           fetchReport(systemKey, monthKey),
           fetchMaster(systemKey),
           fetchKontrolMingguan().catch(() => []),
+          fetchReportHasil(systemKey, monthKey).catch(() => null),
         ]);
         if (cancelled) return;
         setEntries(ent.map((e) => ({ ...e, id: e.id || uid() })));
         setMasterPoints(pts);
         setKontrolRecords(kontrol);
+        setReportHasilMeta(rh);
         if (rep.found) {
           setNarrative({ ...emptyNarrative(), ...rep.narrative });
           setSignoff(rep.signoff || emptySignoff());
@@ -1313,6 +1433,28 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
     load();
     return () => { cancelled = true; };
   }, [systemKey, monthKey]);
+
+  // Formulir QC (Report_Hasil) sudah final di-acc Supervisor/Manager QC?
+  const qcFinalApproved = !!reportHasilMeta?.diperiksa?.nama;
+  // Pengkajian (narasi QA) sudah final di-acc Manager QA ("Mengetahui")?
+  // Begitu ini true, seluruh data (entri, kontrol mingguan, formulir QC,
+  // narasi) jadi arsip terkunci — hanya Administrator yang masih bisa ubah/hapus.
+  const pengkajianFinalized = !!signoff?.diperiksa?.nama;
+  const recordsLocked = !isAdmin && pengkajianFinalized;
+
+  // QC (Staff-Manager QC) & QA (Supervisor/Manager QA, membantu input) boleh
+  // isi/hapus data SELAMA formulir QC belum final di-acc & pengkajian belum
+  // final — begitu salah satu sudah final, data dianggap selesai/terkunci.
+  const canInputQC = isAdmin || (!recordsLocked && !qcFinalApproved && (hasAccess(session, "Staff", "QC") || hasAccess(session, "Supervisor", "QA")));
+  const canDeleteQC = isAdmin || (!recordsLocked && !qcFinalApproved && (hasAccess(session, "Supervisor", "QC") || hasAccess(session, "Supervisor", "QA")));
+  // QA baru boleh mulai menyusun pengkajian SETELAH formulir QC selesai final
+  // di-acc oleh Supervisor/Manager QC (Administrator boleh kapan saja).
+  const canEditQA = isAdmin || (!recordsLocked && qcFinalApproved && hasAccess(session, "Supervisor", "QA"));
+  const canApproveFinal = isAdmin || (!recordsLocked && qcFinalApproved && hasAccess(session, "Manager", "QA"));
+  // Tamu (login) & siapa pun yang login boleh lihat pembahasan/pengkajian
+  // lengkap; publik tanpa login hanya boleh lihat data hasil pengujian mentah.
+  const canViewPembahasan = !!session;
+  const canPrint = hasAccess(session, "Staff");
 
   const overallLevel = systemOverallLevel(entries, system.jenis);
 
@@ -1469,24 +1611,30 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
   if (mode === "reportHasil") {
     return (
       <ReportHasilPanel systemKey={systemKey} entriesForMonth={entries} monthKey={monthKey}
-        session={session} token={token} onBack={() => setMode("pengkajian")} kontrolRecords={kontrolRecords} masterPoints={masterPoints} />
+        session={session} token={token}
+        onBack={() => {
+          setMode("pengkajian");
+          fetchReportHasil(systemKey, monthKey).then(setReportHasilMeta).catch(() => {});
+        }}
+        kontrolRecords={kontrolRecords} masterPoints={masterPoints} />
     );
   }
 
   return (
-    <div className="mx-auto max-w-5xl p-6 print:max-w-none print:p-0">
+    <div className="mx-auto max-w-5xl p-6 print:max-w-none print:p-0" data-print-blocked={!canPrint}>
+      <div className="print-blocked-notice">Akses print/download PDF dibatasi untuk akun Staff/Supervisor/Manager ke atas. Silakan login dengan akun yang sesuai.</div>
       <div className="no-print mb-4 flex items-center justify-between">
         <button onClick={onBack} className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-800">
           <ChevronLeft size={16} /> Kembali ke Dashboard
         </button>
         <div className="flex items-center gap-2">
           <input type="month" value={monthKey} onChange={(ev) => setMonthKey(ev.target.value)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" />
-          {isQC && (
+          {(isQC || isQA) && (
             <button onClick={() => setMode("reportHasil")} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
-              <Printer size={15} /> Report Hasil Pemeriksaan
+              <Printer size={15} /> {isQC ? "Report Hasil Pemeriksaan" : "Lihat Formulir QC"}
             </button>
           )}
-          {isQA && (
+          {isQA && canPrint && (
             <button onClick={() => window.print()} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
               <Printer size={15} /> Download / Print PDF
             </button>
@@ -1495,19 +1643,19 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       </div>
 
       <div className="mb-5 overflow-hidden rounded-xl border border-slate-200 print-card">
-        <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-blue-900 px-5 py-4">
+        <div className="bg-gradient-to-r from-teal-950 via-teal-900 to-teal-800 px-5 py-4">
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
             <div className="flex items-start gap-3">
               <img src="/logo-rama.png" alt="Logo PT. Rama Emerald Multi Sukses" className="h-12 w-12 shrink-0 object-contain brightness-0 invert" />
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-blue-300">PT. Rama Emerald Multi Sukses — QA</p>
+                <p className="text-xs font-semibold uppercase tracking-wider text-teal-300">PT. Rama Emerald Multi Sukses — QA</p>
                 <h2 className="text-xl font-bold text-white">Pengkajian Trend Data Sistem Pengolahan Air (SPA)</h2>
-                <p className="text-sm text-blue-100">
+                <p className="text-sm text-teal-100">
                   Sistem: <span className="font-medium text-white">{system.label}</span> · Periode: <span className="font-medium text-white">{monthLabel(monthKey)}</span>
                 </p>
               </div>
             </div>
-            <p className="shrink-0 text-xs font-medium text-blue-100 sm:text-right">No. Formulir: <span className="text-white">QA.FM.156</span></p>
+            <p className="shrink-0 text-xs font-medium text-teal-100 sm:text-right">No. Formulir: <span className="text-white">QA.FM.156</span></p>
           </div>
         </div>
         <div className="flex items-center justify-between bg-white px-5 py-3">
@@ -1519,15 +1667,30 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       {saveError && <p className="no-print mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{saveError}</p>}
 
       {!session && (
-        <div className="no-print mb-4 rounded-lg bg-blue-50 px-4 py-2.5 text-sm text-blue-700">
-          Anda melihat mode publik (lihat saja). Login sebagai Staff/Supervisor/Manager untuk mengisi atau menyetujui data.
+        <div className="no-print mb-4 rounded-lg bg-teal-50 px-4 py-2.5 text-sm text-teal-700">
+          Anda melihat mode publik — hanya data hasil pengujian mentah. Login untuk melihat grafik, pembahasan, dan pengkajian lengkap.
+        </div>
+      )}
+      {session && recordsLocked && (
+        <div className="no-print mb-4 flex items-center gap-1.5 rounded-lg bg-slate-100 px-4 py-2.5 text-sm text-slate-600">
+          <Lock size={14} /> Pengkajian periode ini sudah final (disetujui) — data terkunci, hanya Administrator yang bisa mengubah/menghapus.
+        </div>
+      )}
+      {session && !recordsLocked && !qcFinalApproved && !isQC && isQA && (
+        <div className="no-print mb-4 flex items-center gap-1.5 rounded-lg bg-amber-50 px-4 py-2.5 text-sm text-amber-700">
+          <Lock size={14} /> Formulir QC belum final disetujui Supervisor/Manager QC — pengkajian baru bisa disusun setelah itu selesai.
         </div>
       )}
 
       <div className="no-print mb-5">
         <EntryEditor system={system} masterPoints={masterPoints} entries={entries} setEntries={setEntries} onSave={saveEntriesOnly} saving={saving}
           canInput={canInputQC} canDeleteExisting={canDeleteQC}
-          accessNote={session ? "Staff/Supervisor/Manager QC atau Supervisor/Manager QA yang bisa mengisi data" : "Login untuk mengisi data"} />
+          accessNote={
+            !session ? "Login untuk mengisi data"
+            : recordsLocked ? "Pengkajian sudah final — data terkunci (hanya Administrator)"
+            : qcFinalApproved ? "Formulir QC sudah final di-acc — data terkunci (hanya Administrator)"
+            : "Staff/Supervisor/Manager QC atau Supervisor/Manager QA yang bisa mengisi data"
+          } />
       </div>
 
       {kontrolError && <p className="no-print mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{kontrolError}</p>}
@@ -1576,6 +1739,8 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
         <div className="mt-3"><LegendRow /></div>
       </div>
 
+      {canViewPembahasan ? (
+      <>
       <div className="no-print mb-4 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-bold text-slate-700">Pembahasan &amp; Narasi</h3>
         {canEditQA ? (
@@ -1593,7 +1758,10 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
           </div>
         ) : (
           <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500">
-            <Lock size={12} /> Hanya Supervisor/Manager QA yang bisa menyusun narasi
+            <Lock size={12} />
+            {recordsLocked ? "Pengkajian sudah final — terkunci"
+              : !qcFinalApproved ? "Menunggu Formulir QC di-acc Supervisor/Manager QC"
+              : "Hanya Supervisor/Manager QA yang bisa menyusun narasi"}
           </span>
         )}
       </div>
@@ -1601,20 +1769,21 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
 
       <div className="mb-5 rounded-xl border border-slate-200 bg-white p-5 print-card">
         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Pendahuluan</label>
-        <AutoTextarea className="w-full rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 focus:border-blue-400 focus:outline-none"
+        <AutoTextarea className="w-full rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 focus:border-teal-400 focus:outline-none"
           rows={4} value={narrative.pendahuluan} onChange={(ev) => setNarrative({ ...narrative, pendahuluan: ev.target.value })} readOnly={!canEditQA} />
       </div>
 
       <div className="mb-5 space-y-4">
         {params.map((p) => (
           <div key={p} className="overflow-hidden rounded-xl border border-slate-200 bg-white print-card">
-            {!getLimit(p, system.jenis).qualitative && <div className="p-4"><ParamChart entries={entries} paramKey={p} systemLabel={system.label} jenis={system.jenis} /></div>}
+            <div className="p-4"><ParamValueTable entries={entries} paramKey={p} jenis={system.jenis} /></div>
+            {!getLimit(p, system.jenis).qualitative && <div className="px-4 pb-4"><ParamChart entries={entries} paramKey={p} systemLabel={system.label} jenis={system.jenis} /></div>}
             <div className="border-t border-slate-100 p-4 avoid-break">
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Hasil &amp; Tren {PARAM_META[p].short}
               </label>
               <AutoTextarea
-                className="w-full rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                className="w-full rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 focus:border-teal-400 focus:outline-none focus:ring-1 focus:ring-teal-400"
                 rows={6}
                 value={narrative.perParameter[p] || ""}
                 placeholder={`Tulis ulasan hasil dan tren untuk ${PARAM_META[p].short}...`}
@@ -1629,7 +1798,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
       {(narrative.reviewTren || canEditQA) && (
         <div className="mb-5 rounded-xl border border-slate-200 bg-white p-5 print-card">
           <h3 className="mb-3 text-sm font-bold text-slate-700">Review Tren (dibanding periode sebelumnya)</h3>
-          <AutoTextarea className="w-full rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 focus:border-blue-400 focus:outline-none"
+          <AutoTextarea className="w-full rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 focus:border-teal-400 focus:outline-none"
             rows={6} placeholder="Opsional — isi kalau ada data periode sebelumnya untuk dibandingkan."
             value={narrative.reviewTren} onChange={(ev) => setNarrative({ ...narrative, reviewTren: ev.target.value })} readOnly={!canEditQA} />
         </div>
@@ -1637,7 +1806,7 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
 
       <div className="mb-5 rounded-xl border border-slate-200 bg-white p-5 print-card">
         <h3 className="mb-3 text-sm font-bold text-slate-700">Kesimpulan</h3>
-        <AutoTextarea className="w-full rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 focus:border-blue-400 focus:outline-none"
+        <AutoTextarea className="w-full rounded-lg border border-slate-200 p-2.5 text-sm text-slate-700 focus:border-teal-400 focus:outline-none"
           rows={8} value={narrative.kesimpulan} onChange={(ev) => setNarrative({ ...narrative, kesimpulan: ev.target.value })} readOnly={!canEditQA} />
       </div>
 
@@ -1646,9 +1815,9 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {[
             { field: "dinilai", label: "Dikaji Oleh", canApprove: canEditQA, onApprove: handleApproveDikaji,
-              disabledNote: "Hanya Supervisor/Manager QA yang bisa menyetujui" },
+              disabledNote: !qcFinalApproved ? "Menunggu Formulir QC di-acc Supervisor/Manager QC" : "Hanya Supervisor/Manager QA yang bisa menyetujui" },
             { field: "diperiksa", label: "Mengetahui", canApprove: canApproveFinal, onApprove: handleApproveMengetahui,
-              disabledNote: signoff.dinilai?.nama ? "Hanya Manager QA yang bisa menyetujui final" : "Menunggu approval \"Dikaji Oleh\" terlebih dahulu" },
+              disabledNote: !qcFinalApproved ? "Menunggu Formulir QC di-acc Supervisor/Manager QC" : signoff.dinilai?.nama ? "Hanya Manager QA yang bisa menyetujui final" : "Menunggu approval \"Dikaji Oleh\" terlebih dahulu" },
           ].map(({ field, label, canApprove, onApprove, disabledNote }) => (
             <div key={field} className="rounded-lg border border-slate-200 p-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
@@ -1680,9 +1849,16 @@ function SystemDetail({ systemKey, monthKey, setMonthKey, onBack, onSaved, sessi
 
       {canEditQA && (
         <div className="no-print mb-8 flex justify-end">
-          <button onClick={saveNarrativeOnly} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60">
+          <button onClick={saveNarrativeOnly} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60">
             {saving ? <Loader2 size={15} className="animate-spin" /> : null} Simpan Narasi &amp; Pembahasan
           </button>
+        </div>
+      )}
+      </>
+      ) : (
+        <div className="mb-8 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+          <Lock size={22} className="mx-auto mb-2 text-slate-300" />
+          <p className="text-sm text-slate-500">Grafik, pembahasan, dan pengkajian lengkap hanya bisa dilihat oleh akun yang sudah login.</p>
         </div>
       )}
     </div>
@@ -1714,23 +1890,23 @@ function LoginModal({ onClose, onLogin }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
       <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
         <div className="mb-4 flex items-center gap-2">
-          <Lock size={18} className="text-blue-700" />
+          <Lock size={18} className="text-teal-700" />
           <h3 className="text-base font-bold text-slate-800">Login SPA</h3>
         </div>
         <form onSubmit={submit}>
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Username</label>
           <input autoFocus type="text" value={username} onChange={(ev) => setUsername(ev.target.value)}
-            className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" />
+            className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none" />
           <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Password</label>
           <input type="password" value={password} onChange={(ev) => setPassword(ev.target.value)}
-            className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" />
+            className="mb-4 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none" />
           {error && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50">
               Batal
             </button>
             <button type="submit" disabled={submitting || !username || !password}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60">
+              className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60">
               {submitting ? <Loader2 size={14} className="animate-spin" /> : null} Masuk
             </button>
           </div>
@@ -1775,14 +1951,14 @@ function ChangePasswordModal({ token, onClose }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
       <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
         <div className="mb-4 flex items-center gap-2">
-          <Lock size={18} className="text-blue-700" />
+          <Lock size={18} className="text-teal-700" />
           <h3 className="text-base font-bold text-slate-800">Ganti Password</h3>
         </div>
         {success ? (
           <div>
             <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">Password berhasil diganti.</p>
             <div className="flex justify-end">
-              <button onClick={onClose} className="rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-800">
+              <button onClick={onClose} className="rounded-lg bg-teal-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-teal-800">
                 Tutup
               </button>
             </div>
@@ -1791,13 +1967,13 @@ function ChangePasswordModal({ token, onClose }) {
           <form onSubmit={submit}>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Password Lama</label>
             <input autoFocus type="password" value={oldPassword} onChange={(ev) => setOldPassword(ev.target.value)}
-              className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" />
+              className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none" />
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Password Baru</label>
             <input type="password" value={newPassword} onChange={(ev) => setNewPassword(ev.target.value)}
-              className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" />
+              className="mb-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none" />
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Ulangi Password Baru</label>
             <input type="password" value={confirmPassword} onChange={(ev) => setConfirmPassword(ev.target.value)}
-              className="mb-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" />
+              className="mb-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none" />
             <p className="mb-4 text-xs text-slate-400">Minimal 6 karakter. Lupa password lama? Hubungi Administrator, bukan lewat form ini.</p>
             {error && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2">
@@ -1805,7 +1981,7 @@ function ChangePasswordModal({ token, onClose }) {
                 Batal
               </button>
               <button type="submit" disabled={submitting || !oldPassword || !newPassword || !confirmPassword}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-60">
+                className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60">
                 {submitting ? <Loader2 size={14} className="animate-spin" /> : null} Simpan Password Baru
               </button>
             </div>
@@ -1845,7 +2021,7 @@ function TopBar({ session, onLoginClick, onLogout, onChangePasswordClick, view, 
               </button>
             </div>
           ) : (
-            <button onClick={onLoginClick} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800">
+            <button onClick={onLoginClick} className="inline-flex items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800">
               <LogIn size={14} /> Login
             </button>
           )}
@@ -2050,6 +2226,24 @@ export default function App() {
     if (view === "dashboard") refreshStatus(monthKey);
   }, [view, monthKey, refreshStatus]);
 
+  // Blokir shortcut cetak (Ctrl+P / Cmd+P) untuk publik (belum login) & role
+  // Tamu — cadangan tambahan di atas aturan CSS @media print (yang menyensor
+  // isi cetakan apa pun caranya, termasuk lewat menu/File > Print browser).
+  useEffect(() => {
+    const canPrint = hasAccess(session, "Staff");
+    if (canPrint) return;
+    function blockPrintShortcut(ev) {
+      const isPrintCombo = (ev.ctrlKey || ev.metaKey) && (ev.key === "p" || ev.key === "P");
+      if (isPrintCombo) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        window.alert("Print/Download PDF hanya untuk akun Staff/Supervisor/Manager ke atas. Silakan login dengan akun yang sesuai.");
+      }
+    }
+    window.addEventListener("keydown", blockPrintShortcut, true);
+    return () => window.removeEventListener("keydown", blockPrintShortcut, true);
+  }, [session]);
+
   useEffect(() => {
     if (view === "activity" && !(session && hasAccess(session, "Supervisor"))) {
       setView("dashboard");
@@ -2064,6 +2258,7 @@ export default function App() {
     <div className="min-h-full bg-slate-50">
       <style>{`
         .only-print { display: none; }
+        .print-blocked-notice { display: none; }
         * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         @media print {
           .no-print { display: none !important; }
@@ -2071,6 +2266,11 @@ export default function App() {
           .only-print { display: block !important; }
           .print-card { box-shadow: none !important; border: 1px solid #cbd5e1 !important; page-break-inside: avoid; break-inside: avoid; }
           .avoid-break { page-break-inside: avoid; break-inside: avoid; }
+          [data-print-blocked="true"] > *:not(.print-blocked-notice) { display: none !important; }
+          [data-print-blocked="true"] .print-blocked-notice {
+            display: block !important; padding: 5rem 2rem; text-align: center;
+            font-size: 15px; font-weight: 700; color: #334155;
+          }
         }
         @page {
           margin: 1.5cm 1.5cm 2cm 1.5cm;
